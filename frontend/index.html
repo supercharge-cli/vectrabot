@@ -59,6 +59,7 @@
         <button id="takeover" type="button">Take over</button>
         <button id="return-control" class="ghost" type="button">Return control</button>
         <iframe id="desktop-frame" title="Desktop"></iframe>
+        <div id="vnc" style="height:420px;background:#000"></div>
       </div>
       <div id="settings" hidden>
         <form id="agent-form">
@@ -156,6 +157,7 @@ async function loadSettings() {
   document.querySelector("#settings-body").textContent = JSON.stringify(body, null, 2);
 }
 let handoffId = "";
+let rfb;
 document.querySelector("#takeover").onclick = async () => {
   try {
     handoffId = crypto.randomUUID().replace(/-/g, "");
@@ -164,6 +166,17 @@ document.querySelector("#takeover").onclick = async () => {
       body: JSON.stringify({ action: "start", minutes: 10, handoffId, botId: "main" }),
     });
     if (body.ok !== true || body.handoff !== true) throw new Error(body.error || "Takeover could not be confirmed");
+    const ticket = await cloud(`/api/instances/${encodeURIComponent(state.sandbox.id)}/computer/vnc-ticket`, {
+      method: "POST",
+      body: JSON.stringify({ handoffId, botId: "main" }),
+    });
+    if (!ticket.wsUrl) throw new Error(ticket.error || "Desktop connection unavailable");
+    const view = document.querySelector("#vnc");
+    view.replaceChildren();
+    const { default: RFB } = await import("https://esm.sh/@novnc/novnc@1.5.0");
+    rfb?.disconnect();
+    rfb = new RFB(view, ticket.wsUrl, { shared: true });
+    rfb.scaleViewport = true;
     error.textContent = "You have the desktop. The agent waits until you return control.";
   } catch (e) { fail(e); }
 };
@@ -175,6 +188,9 @@ document.querySelector("#return-control").onclick = async () => {
       body: JSON.stringify({ action: "stop", handoffId, botId: "main" }),
     });
     if (body.ok !== true || body.handoff !== false) throw new Error(body.error || "Return could not be confirmed");
+    rfb?.disconnect();
+    rfb = undefined;
+    document.querySelector("#vnc").replaceChildren();
     error.textContent = "Control returned. The sandbox stays awake while you are connected.";
   } catch (e) { fail(e); }
 };
