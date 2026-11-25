@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Vectrabot</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; font: 15px/1.45 system-ui, sans-serif; background: #0b0d10; color: #e7ecf1; }
+    main { max-width: 960px; margin: 0 auto; padding: 28px 20px 48px; }
+    h1 { font-size: 1.4rem; margin: 0 0 8px; }
+    p.lede { color: #9aa6b2; margin-top: 0; }
+    label, button, input { font: inherit; }
+    input { width: 100%; box-sizing: border-box; margin: 6px 0 12px; padding: 8px 10px; border-radius: 8px; border: 1px solid #2a3340; background: #11161c; color: inherit; }
+    button { border: 0; border-radius: 8px; padding: 8px 12px; background: #1d6fbf; color: white; cursor: pointer; }
+    button.ghost { background: transparent; color: #9ec6ef; }
+    .row { display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #1c2430; }
+    .tabs { display: flex; gap: 8px; margin: 16px 0; }
+    pre, iframe { width: 100%; box-sizing: border-box; background: #07090c; border: 1px solid #243041; border-radius: 10px; }
+    pre { min-height: 220px; max-height: 320px; overflow: auto; padding: 12px; white-space: pre-wrap; }
+    iframe { height: 420px; background: white; }
+    .error { color: #ff8d8d; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Vectrabot</h1>
+  <p class="lede">The same cloud workspace on this computer and on the phone. Work runs in the sandbox.</p>
+  <section id="login">
+    <label>Email <input id="email" autocomplete="username" /></label>
+    <label>Password <input id="password" type="password" autocomplete="current-password" /></label>
+    <button id="signin" type="button">Sign in</button>
+  </section>
+  <section id="app" hidden>
+    <div id="list"></div>
+    <div id="workspace" hidden>
+      <div class="tabs">
+        <button type="button" data-tab="terminal">Terminal</button>
+        <button type="button" data-tab="preview">Preview</button>
+        <button type="button" data-tab="desktop">Desktop</button>
+        <button type="button" data-tab="settings">Settings</button>
+      </div>
+      <div id="terminal">
+        <pre id="screen">Connecting…</pre>
+        <form id="shell">
+          <input id="command" placeholder="Type a command" />
+          <button type="submit">Send</button>
+        </form>
+      </div>
+      <div id="preview" hidden>
+        <form id="preview-form">
+          <input id="port" value="3000" />
+          <button type="submit">Open preview</button>
+        </form>
+        <iframe id="preview-frame" title="Preview"></iframe>
+      </div>
+      <div id="desktop" hidden><iframe id="desktop-frame" title="Desktop"></iframe></div>
+      <div id="settings" hidden>
+        <form id="agent-form">
+          <input id="agent-name" placeholder="New agent name" />
+          <button type="submit">Add agent</button>
+        </form>
+        <pre id="settings-body"></pre>
+      </div>
+    </div>
+  </section>
+  <p id="error" class="error"></p>
+</main>
+<script>
+const CLOUD = "https://infra.xibeai.in";
+const state = { token: "", sandbox: null, socket: null };
+const error = document.querySelector("#error");
+function fail(e) { error.textContent = e.message || String(e); }
+async function cloud(path, options = {}) {
+  const headers = { accept: "application/json", ...(options.body ? { "content-type": "application/json" } : {}), ...(state.token ? { authorization: "Bearer " + state.token } : {}) };
+  const response = await fetch(CLOUD + path, { ...options, headers });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || "Cloud request failed");
+  return body;
+}
+document.querySelector("#signin").onclick = async () => {
+  error.textContent = "";
+  try {
+    const signed = await cloud("/api/auth/login", { method: "POST", body: JSON.stringify({ email: email.value.trim(), password: password.value }) });
+    if (!signed.token) throw new Error("Server did not return a token");
+    state.token = signed.token;
+    const list = await cloud("/api/instances");
+    document.querySelector("#login").hidden = true;
+    document.querySelector("#app").hidden = false;
+    const box = document.querySelector("#list");
+    box.replaceChildren();
+    for (const item of list.instances || []) {
+      const row = document.createElement("div");
+      row.className = "row";
+      row.innerHTML = `<span></span><button type="button">Open</button>`;
+      row.querySelector("span").textContent = item.name || "Workspace";
+      row.querySelector("button").onclick = () => openWorkspace(item.id);
+      box.append(row);
+    }
+  } catch (e) { fail(e); }
+};
+async function openWorkspace(id) {
+  error.textContent = "";
+  try {
+    const attach = await cloud(`/api/instances/${encodeURIComponent(id)}/attach`, { method: "POST", body: "{}" });
+    state.sandbox = { id, host: attach.url, session: attach.token };
+    document.querySelector("#workspace").hidden = false;
+    connectTerminal();
+    const desktop = await cloud(`/api/instances/${encodeURIComponent(id)}/preview?port=6080`);
+    document.querySelector("#desktop-frame").src = desktop.host || "";
+    await loadSettings();
+  } catch (e) { fail(e); }
+}
+function connectTerminal() {
+  const host = new URL(state.sandbox.host);
+  host.protocol = host.protocol === "https:" ? "wss:" : "ws:";
+  host.pathname = "/v1/terminal";
+  host.search = "token=" + encodeURIComponent(state.sandbox.session);
+  const screen = document.querySelector("#screen");
+  screen.textContent = "";
+  state.socket?.close();
+  const socket = new WebSocket(host);
+  state.socket = socket;
+  socket.onmessage = (event) => { screen.textContent += typeof event.data === "string" ? event.data : ""; };
+  socket.onerror = () => { screen.textContent += "\nTerminal connection failed"; };
+  document.querySelector("#shell").onsubmit = (event) => {
+    event.preventDefault();
+    const command = document.querySelector("#command");
+    socket.send(command.value + "\n");
+    command.value = "";
+  };
+}
+document.querySelectorAll("[data-tab]").forEach((button) => {
+  button.onclick = () => {
+    for (const name of ["terminal", "preview", "desktop", "settings"]) {
+      document.querySelector("#" + name).hidden = name !== button.dataset.tab;
+    }
+  };
+});
+document.querySelector("#preview-form").onsubmit = async (event) => {
+  event.preventDefault();
+  try {
+    const port = document.querySelector("#port").value;
+    const body = await cloud(`/api/instances/${encodeURIComponent(state.sandbox.id)}/preview?port=${encodeURIComponent(port)}`);
+    document.querySelector("#preview-frame").src = body.host || "";
+  } catch (e) { fail(e); }
+};
+async function loadSettings() {
+  const body = await cloud(`/api/instances/${encodeURIComponent(state.sandbox.id)}/sandbox-state`);
+  document.querySelector("#settings-body").textContent = JSON.stringify(body, null, 2);
+}
+document.querySelector("#agent-form").onsubmit = async (event) => {
+  event.preventDefault();
+  try {
+    const name = document.querySelector("#agent-name").value.trim();
+    const id = name.toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 64);
+    await cloud(`/api/instances/${encodeURIComponent(state.sandbox.id)}/sandbox-state`, {
+      method: "PUT",
+      body: JSON.stringify({ agent: { id, name, engine: "supercharge" } }),
+    });
+    document.querySelector("#agent-name").value = "";
+    await loadSettings();
+  } catch (e) { fail(e); }
+};
+</script>
+</body>
+</html>
