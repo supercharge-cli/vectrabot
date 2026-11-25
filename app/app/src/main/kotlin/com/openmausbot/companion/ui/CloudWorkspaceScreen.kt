@@ -162,6 +162,7 @@ fun CloudWorkspaceScreen(onBack: () -> Unit) {
                         error = ""
                         scope.launch {
                             try {
+                                withContext(Dispatchers.IO) { api.post("/api/instances/$id/wake", token, "{}") }
                                 val attach = withContext(Dispatchers.IO) { api.post("/api/instances/$id/attach", token, "{}") }
                                 val host = attach.optString("url")
                                 val session = attach.optString("token")
@@ -189,8 +190,27 @@ fun CloudWorkspaceScreen(onBack: () -> Unit) {
 
 private data class OpenSandbox(val instanceId: String, val host: String, val session: String, val cloudToken: String)
 
+private var desktopHandoffId = ""
+
+private suspend fun handoff(api: CloudApi, sandbox: OpenSandbox, action: String) {
+    if (action == "start") {
+        desktopHandoffId = java.util.UUID.randomUUID().toString().replace("-", "")
+    }
+    if (desktopHandoffId.length < 16) throw IllegalStateException("Take over before returning control")
+    val body = JSONObject()
+        .put("action", action)
+        .put("minutes", 10)
+        .put("handoffId", desktopHandoffId)
+        .put("botId", "main")
+        .toString()
+    withContext(Dispatchers.IO) {
+        api.post("/api/instances/${sandbox.instanceId}/computer/handoff", sandbox.cloudToken, body)
+    }
+}
+
 @Composable
 private fun SandboxPane(api: CloudApi, sandbox: OpenSandbox, tab: String, onTab: (String) -> Unit) {
+    val scope = rememberCoroutineScope()
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("terminal", "preview", "desktop", "settings").forEach { name ->
@@ -200,7 +220,14 @@ private fun SandboxPane(api: CloudApi, sandbox: OpenSandbox, tab: String, onTab:
         when (tab) {
             "terminal" -> CloudTerminal(sandbox)
             "preview" -> CloudPage(api, sandbox, 3000, "Preview")
-            "desktop" -> CloudPage(api, sandbox, 6080, "Desktop")
+            "desktop" -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("If nothing is running, the sandbox pauses after 15 minutes. Opening it wakes it. Take over pauses the agent until you return control.")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = { scope.launch { handoff(api, sandbox, "start") } }) { Text("Take over") }
+                    TextButton(onClick = { scope.launch { handoff(api, sandbox, "stop") } }) { Text("Return control") }
+                }
+                CloudPage(api, sandbox, 6080, "Desktop")
+            }
             else -> CloudSettings(api, sandbox)
         }
     }
