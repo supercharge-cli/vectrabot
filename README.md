@@ -1,13 +1,9 @@
 # Vectrabot
 
-The phone app and this PC app talk to the same cloud account. The workspace itself runs in an E2B sandbox.
+One repo for the new product.
 
-- `backend/` is the Go process inside that sandbox. It serves files, a shell, Supercharge turns, preview status, agents, and settings. It has no website.
-- `frontend/` is the shared screen: sign in, pick a workspace, then use the terminal, preview, desktop, and agent settings.
-- `pc/` opens that frontend on this computer.
+- `app/` is the new app. It is the Maus Kotlin phone app, with Vectra Cloud sign-in. The Flutter app in cloud-infra is only a feature reference. It is not this app.
+- `backend/` is the new Go server that runs inside the E2B sandbox. Files, shell, Supercharge turns, preview, desktop status, agents, and settings live here.
+- `frontend/` is the screen for this computer: the same sign-in, workspace, terminal, preview, desktop, and agent settings the phone calls.
 
-```sh
-cd pc && go run .
-```
-
-Sign-in uses `https://infra.xibeai.in`. Payment stays on that website.
+Sign-in and payment stay on `https://infra.xibeai.in`. The workspace does not run on the person's own computer.
