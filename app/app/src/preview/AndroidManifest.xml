@@ -4,7 +4,6 @@
     <application>
         <!-- Pair from inside Preview using its scanner or manual form. Keep
              release links and system share destinations unambiguous. -->
-        <activity android:name=".PairingLinkActivity" tools:node="remove" />
         <activity android:name=".ShareReceiveActivity" tools:node="remove" />
     </application>
 </manifest>

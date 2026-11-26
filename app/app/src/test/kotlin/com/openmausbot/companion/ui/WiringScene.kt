@@ -121,8 +121,6 @@ internal class WiringScene(
         shareTranscript = { _, _ -> null },
         openCloudDesktop = { null },
         shareInbox = ShareInbox(),
-        alwaysOnEnabled = MutableStateFlow(false),
-        onToggleAlwaysOn = {},
     )
 
     private object SilentDiscovery : CompanionDiscovery {

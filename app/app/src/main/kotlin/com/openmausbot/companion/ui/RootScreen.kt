@@ -202,7 +202,7 @@ fun CompanionRoot(
             Surface(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
                 Box(modifier = Modifier.fillMaxSize()) {
                     if (showingCloud) {
-                        CloudWorkspaceScreen(onBack = { showingCloud = false })
+                        CloudWorkspaceScreen()
                         return@Box
                     }
                     when (route) {

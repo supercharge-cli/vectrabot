@@ -46,10 +46,73 @@ internal class CloudSandboxClient(
         return url
     }
 
+    /** The workspace's agents, straight from the host. */
+    fun agents(host: String, session: String): List<SandboxAgent> {
+        val rows = read(hostRequest(host, session, "/v1/agents").get().build()).optJSONArray("agents") ?: return emptyList()
+        return (0 until rows.length()).mapNotNull { i ->
+            val agent = rows.optJSONObject(i) ?: return@mapNotNull null
+            val id = agent.optString("id")
+            if (id.isBlank()) null else SandboxAgent(id, agent.optString("name").ifBlank { id }, agent.optString("instructions"))
+        }
+    }
+
+    fun putAgent(host: String, session: String, name: String, instructions: String) {
+        val id = agentIdFor(name)
+        if (id.isBlank()) throw IllegalArgumentException("Give the agent a name with letters or numbers")
+        val body = JSONObject().put("id", id).put("name", name.trim()).put("instructions", instructions.trim()).put("engine", "supercharge")
+        read(hostRequest(host, session, "/v1/agents").put(body.toString().toRequestBody(sandboxJson)).build())
+    }
+
+    fun deleteAgent(host: String, session: String, id: String) {
+        read(hostRequest(host, session, "/v1/agents?id=" + java.net.URLEncoder.encode(id, "UTF-8")).delete().build())
+    }
+
+    /** Ports where an app in the workspace is listening (the sandbox's own services left out). */
+    fun ports(host: String, session: String): List<Int> {
+        val rows = read(hostRequest(host, session, "/v1/ports").get().build()).optJSONArray("ports") ?: return emptyList()
+        return (0 until rows.length()).map { rows.optInt(it) }.filter { it in 1..65535 }
+    }
+
+    /** Whether something answers on [port] inside the workspace. */
+    fun listening(host: String, session: String, port: Int): Boolean =
+        http.newCall(hostRequest(host, session, "/v1/preview?port=$port").get().build()).execute().use { response ->
+            val text = response.body?.string().orEmpty()
+            text.trimStart().startsWith("{") && JSONObject(text).optBoolean("listening")
+        }
+
+    /**
+     * The next desktop frame after [after] (a JPEG), or null when the screen has
+     * not changed. View only: nothing here can send input to the desktop.
+     */
+    fun frame(host: String, session: String, after: Long): DesktopFrame? {
+        http.newCall(hostRequest(host, session, "/v1/computer/frame?after=$after").get().build()).execute().use { response ->
+            if (response.code == 204) return null
+            if (response.code == 401) throw SessionExpired("Session expired")
+            val bytes = response.body?.bytes() ?: ByteArray(0)
+            if (!response.isSuccessful) {
+                val text = String(bytes)
+                val error = if (text.trimStart().startsWith("{")) JSONObject(text).optString("error") else ""
+                throw IllegalStateException(error.ifBlank { "Desktop view unavailable (${response.code})" })
+            }
+            return DesktopFrame(response.header("X-Frame-Version")?.toLongOrNull() ?: (after + 1), bytes)
+        }
+    }
+
+    fun clipboard(host: String, session: String): String =
+        read(hostRequest(host, session, "/v1/computer/clipboard").get().build()).optString("text")
+
+    fun sendClipboard(host: String, session: String, text: String) {
+        read(hostRequest(host, session, "/v1/computer/clipboard").post(JSONObject().put("text", text).toString().toRequestBody(sandboxJson)).build())
+    }
+
+    private fun hostRequest(host: String, session: String, path: String): Request.Builder =
+        Request.Builder().url(host.trimEnd('/') + path).header("authorization", "Bearer $session")
+
     private fun read(request: Request): JSONObject {
         http.newCall(request).execute().use { response ->
             val text = response.body?.string().orEmpty()
             val json = if (text.trimStart().startsWith("{")) JSONObject(text) else JSONObject()
+            if (response.code == 401) throw SessionExpired(json.optString("error").ifBlank { "Session expired" })
             if (!response.isSuccessful) {
                 throw IllegalStateException(json.optString("error").ifBlank { "Request failed (${response.code})" })
             }
@@ -83,3 +146,89 @@ internal fun desktopViewerHtml(wsUrl: String): String {
         </script></body></html>
     """.trimIndent()
 }
+
+internal data class SandboxAgent(val id: String, val name: String, val instructions: String)
+
+internal class DesktopFrame(val version: Long, val jpeg: ByteArray)
+
+/** The id an agent gets from its name, as the PC app makes it. */
+internal fun agentIdFor(name: String): String =
+    name.trim().lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-').take(64)
+
+/** Preview hosts may come without a scheme; the page is always served over https. */
+internal fun previewUrl(host: String): String {
+    val trimmed = host.trim()
+    if (trimmed.isEmpty()) return ""
+    return if (trimmed.startsWith("https://") || trimmed.startsWith("http://")) trimmed else "https://$trimmed"
+}
+
+/** A terminal that resumes the same shell when it reconnects with [shellId]. */
+internal fun terminalUrl(host: String, session: String, shellId: String): String {
+    val base = host.trim().trimEnd('/').replaceFirst(Regex("^https://"), "wss://").replaceFirst(Regex("^http://"), "ws://")
+    val enc = { v: String -> java.net.URLEncoder.encode(v, "UTF-8") }
+    return "$base/v1/terminal?token=${enc(session)}&session=${enc(shellId)}"
+}
+
+/** A shell id the host accepts (16-64 of A-Z a-z 0-9 _ -). */
+internal fun newShellId(): String = java.util.UUID.randomUUID().toString().replace("-", "")
+
+internal sealed interface TerminalControl {
+    data class Attached(val resumed: Boolean) : TerminalControl
+    data object Exited : TerminalControl
+}
+
+/** Text frames on the terminal socket are control messages, never shell output. */
+internal fun terminalControl(text: String): TerminalControl? {
+    val json = runCatching { JSONObject(text) }.getOrNull() ?: return null
+    return when (json.optString("type")) {
+        "attached" -> TerminalControl.Attached(json.optBoolean("resumed"))
+        "exit" -> TerminalControl.Exited
+        else -> null
+    }
+}
+
+/**
+ * Plain-text view of terminal output for a phone screen: escape sequences
+ * dropped, carriage returns and backspaces applied, the tail kept.
+ */
+internal class TerminalScreen(private val limit: Int = 24_000) {
+    private val text = StringBuilder()
+    private var escape = 0 // 0 none, 1 after ESC, 2 CSI, 3 OSC
+    private var lineStart = 0
+
+    val value: String get() = text.toString()
+
+    fun clear() { text.setLength(0); lineStart = 0; escape = 0 }
+
+    fun append(chunk: String) {
+        for (c in chunk) {
+            when (escape) {
+                1 -> escape = when (c) { '[' -> 2; ']' -> 3; else -> 0 }
+                2 -> if (c in '@'..'~') escape = 0
+                3 -> if (c == '\u0007' || c == '\u001b') escape = if (c == '\u001b') 1 else 0
+                else -> when (c) {
+                    '\u001b' -> escape = 1
+                    // A carriage return moves to the line start: what follows overwrites it.
+                    '\r' -> pendingReturn = true
+                    '\n' -> { pendingReturn = false; text.append('\n'); lineStart = text.length }
+                    '\b' -> if (text.length > lineStart) text.setLength(text.length - 1)
+                    '\u0007' -> Unit
+                    else -> if (c >= ' ' || c == '\t') {
+                        if (pendingReturn) { text.setLength(lineStart); pendingReturn = false }
+                        text.append(c)
+                    }
+                }
+            }
+        }
+        if (text.length > limit) {
+            val cut = text.length - limit
+            text.delete(0, cut)
+            lineStart = (lineStart - cut).coerceAtLeast(0)
+        }
+    }
+
+    private var pendingReturn = false
+}
+
+/** The host or the cloud refused the credential: attach (or sign in) again. */
+internal class SessionExpired(message: String) : IllegalStateException(message)

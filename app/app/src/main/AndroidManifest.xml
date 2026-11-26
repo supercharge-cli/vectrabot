@@ -7,17 +7,6 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!--
-      Opt-in "always on" background connection (Settings toggle, default off).
-      FOREGROUND_SERVICE_CONNECTED_DEVICE rather than dataSync: this service
-      exists to keep the pairing to the paired computer alive, not to move
-      data in bulk, and dataSync foreground services face a ~6h/24h system
-      timeout on Android 15+ that connectedDevice does not.
-    -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
-    <!--
       Pairing QR only, and asked for only when the scanner is opened. The app is
       fully usable without it: the NSD list and a typed address are the other two
       ways in (§6), so a camera the user never grants costs nothing.
@@ -85,8 +74,8 @@
         <!--
           persistNever: nothing about this Activity, its launching Intent
           included, may be written to task state that survives a reboot. It only
-          ever receives ACTION_MAIN or the sanitized Intent PairingLinkActivity
-          builds, but a one-time pairing credential is not the kind of thing to
+          ever receives ACTION_MAIN or the sanitized Intent ShareReceiveActivity
+          builds, but a one-time credential is not the kind of thing to
           protect by one layer.
         -->
         <activity
@@ -101,32 +90,6 @@
             </intent-filter>
         </activity>
 
-        <!--
-          The deep-link door. A pairing URL carries a one-time credential, and the
-          system keeps a copy of an Activity's launching Intent — handing it back
-          on restart, and under the default persistRootOnly writing a root
-          Activity's Intent across a reboot. This one is therefore never the root
-          of the main task (its own taskAffinity), never kept in history, never in
-          recents, and never persisted. It moves the invite into process memory
-          and starts MainActivity with an Intent carrying no data and no extras.
-        -->
-        <activity
-            android:name=".PairingLinkActivity"
-            android:excludeFromRecents="true"
-            android:exported="true"
-            android:noHistory="true"
-            android:persistableMode="persistNever"
-            android:taskAffinity=""
-            android:theme="@android:style/Theme.Translucent.NoTitleBar">
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data
-                    android:host="pair"
-                    android:scheme="openmausbot" />
-            </intent-filter>
-        </activity>
         <!--
           Inbound share. The sending app's content URIs are granted to this
           Activity; it copies them into the app cache, starts MainActivity with
@@ -197,31 +160,6 @@
             android:exported="false"
             android:stopWithTask="true" />
 
-        <!--
-          The opt-in "always on" counterpart to SessionLingerService above.
-          stopWithTask="false" is the whole point: this must keep running when
-          the user swipes the app away, which is exactly what the 25-second
-          linger window above does not attempt.
-        -->
-        <service
-            android:name=".lifecycle.AlwaysOnConnectionService"
-            android:exported="false"
-            android:foregroundServiceType="connectedDevice"
-            android:stopWithTask="false" />
-
-        <!--
-          Restarts AlwaysOnConnectionService after a reboot, only when the user
-          left the Settings toggle on. Not exported beyond what BOOT_COMPLETED
-          requires; carries no data and does nothing when the toggle is off.
-        -->
-        <receiver
-            android:name=".lifecycle.AlwaysOnBootReceiver"
-            android:exported="true"
-            android:permission="android.permission.RECEIVE_BOOT_COMPLETED">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-            </intent-filter>
-        </receiver>
 
         <!--
           Share sheet hand-off for exported transcripts. Not exported, no
