@@ -30,7 +30,7 @@ internal class BotsState(val client: BotsClient) {
 
     fun replaceBots(list: List<Bot>) {
         bots = list
-        if (bots.none { it.id == botId }) botId = bots.firstOrNull()?.id.orEmpty()
+        if (bots.none { it.id == botId }) botId = (bots.firstOrNull { it.main } ?: bots.firstOrNull())?.id.orEmpty()
     }
 
     fun select(bot: Bot, thread: String? = null) {

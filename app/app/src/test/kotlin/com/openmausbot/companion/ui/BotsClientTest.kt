@@ -151,4 +151,33 @@ class BotsClientTest {
         st.apply(HostFrame("bot.deleted", JSONObject("""{"botId":"b1"}""")))
         assertNotNull(st.bots); assertTrue(st.bots.isEmpty())
     }
+
+    @Test fun parsesIdentityAndSharesTheHostGlyph() {
+        val b = parseBot(JSONObject("""{"id":"b1","name":"Chief","main":true,"pinned":false,"avatarKind":"image","avatarUrl":"/api/bots/b1/avatar?v=3","avatarShape":"square","emoji":"","glyph":2479,"description":"Runs it","createdAt":7}"""))
+        assertTrue(b.main); assertEquals("image", b.avatarKind); assertEquals("/api/bots/b1/avatar?v=3", b.avatarUrl); assertEquals("square", b.avatarShape)
+        assertEquals(2479, b.glyph); assertEquals("Runs it", b.description); assertEquals(7L, b.createdAt)
+        val old = parseBot(JSONObject("""{"id":"b2","name":"x","avatarUrl":null}"""))
+        assertEquals("generated", old.avatarKind); assertEquals(null, old.avatarUrl); assertEquals(-1, old.glyph); assertEquals("circle", old.avatarShape)
+        // Same values the Go host and the PC client compute.
+        assertEquals(2479, glyphOf("bot_0123456789abcdef")); assertEquals(10540, glyphOf("a")); assertEquals(18499, glyphOf("Zz-9"))
+        assertEquals(listOf(0 to 0, 4 to 0), glyphCells(1))
+    }
+
+    @Test fun sortsMainThenPinnedThenRecent() {
+        fun bot(id: String, main: Boolean = false, pinned: Boolean = false, lastAt: Long = 0) = parseBot(JSONObject().put("id", id).put("name", id).put("main", main).put("pinned", pinned).put("lastAt", lastAt))
+        val sorted = sortBots(listOf(bot("old", lastAt = 1), bot("new", lastAt = 9), bot("pin", pinned = true), bot("main", main = true)))
+        assertEquals(listOf("main", "pin", "new", "old"), sorted.map { it.id })
+    }
+
+    @Test fun uploadsAndFetchesAFace() {
+        server.enqueue(MockResponse().setBody("""{"bot":{"id":"b1","name":"x","avatarKind":"image","avatarUrl":"/api/bots/b1/avatar?v=1"}}"""))
+        server.enqueue(MockResponse().setBody(okio.Buffer().write(byteArrayOf(1, 2, 3))))
+        val c = client
+        val b = c.uploadAvatar("b1", byteArrayOf(0x89.toByte(), 'P'.code.toByte()))
+        assertEquals("image", b.avatarKind)
+        val put = server.takeRequest()
+        assertEquals("PUT", put.method); assertEquals("/api/bots/b1/avatar", put.path); assertEquals("Bearer dev-session", put.getHeader("authorization"))
+        assertTrue(c.avatarBytes("/api/bots/b1/avatar?v=1")!!.contentEquals(byteArrayOf(1, 2, 3)))
+        assertEquals(null, c.avatarBytes("https://evil.example/x.png"))
+    }
 }

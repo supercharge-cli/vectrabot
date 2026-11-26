@@ -63,7 +63,7 @@ function h(tag, attrs = {}, ...kids) {
     if (k === "class") el.className = v;
     else if (k === "html") el.innerHTML = v;
     else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
-    else if (k === "style" && typeof v === "object") Object.assign(el.style, v);
+    else if (k === "style" && typeof v === "object") for (const [p, x] of Object.entries(v)) { if (p.startsWith("--")) el.style.setProperty(p, x); else el.style[p] = x; }
     else el.setAttribute(k, v === true ? "" : v);
   }
   for (const kid of kids.flat()) if (kid != null && kid !== false) el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
@@ -85,9 +85,60 @@ function timeAgo(ms) {
 }
 const clock = (ms) => new Date(ms).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 const initial = (name) => (String(name || "?").trim()[0] || "?").toUpperCase();
+// ---------- bot faces ----------
+// A bot's face is a generated pattern (a 15-bit 5x5 mirrored grid the host
+// derives from the bot's glyph seed), its initial, an emoji or an uploaded
+// image, on its colour and cropped to its shape. Same rules as the phone app.
+function glyphOf(seed) {
+  let x = 0x811c9dc5;
+  for (const b of new TextEncoder().encode(String(seed))) { x ^= b; x = Math.imul(x, 0x01000193) >>> 0; }
+  let g = x & 0x7fff;
+  const on = (v) => { let n = 0; for (; v; v &= v - 1) n++; return n; };
+  while (on(g) < 4 || on(g) > 11) g = (g * 31 + 0x2b5d) & 0x7fff;
+  return g;
+}
+function glyphSvg(bits) {
+  let cells = "";
+  for (let r = 0; r < 5; r++) for (let c = 0; c < 3; c++) {
+    if (!(bits >> (r * 3 + c) & 1)) continue;
+    for (const x of c === 2 ? [2] : [c, 4 - c]) cells += `<rect x="${6 + x * 4.4}" y="${6 + r * 4.4}" width="4" height="4" rx="1.1"/>`;
+  }
+  return `<svg class="glyph" viewBox="0 0 34 34" aria-hidden="true"><defs><linearGradient id="gg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".18"/><stop offset="1" stop-color="#000" stop-opacity=".12"/></linearGradient></defs><rect width="34" height="34" fill="var(--c)"/><rect width="34" height="34" fill="url(#gg)"/><g fill="#fff" fill-opacity=".93">${cells}</g></svg>`;
+}
+const faceCache = new Map(); // host avatar path -> Promise<object URL>
+function faceSrc(path) {
+  const key = state.ws?.id + path;
+  if (!faceCache.has(key)) {
+    const p = fetch(state.ws.host + path, { headers: { authorization: "Bearer " + state.ws.session } })
+      .then((r) => { if (!r.ok) throw new Error("avatar " + r.status); return r.blob(); })
+      .then((b) => URL.createObjectURL(b));
+    p.catch(() => faceCache.delete(key));
+    faceCache.set(key, p);
+  }
+  return faceCache.get(key);
+}
 function avatar(el, bot, busy) {
-  el.style.setProperty("--c", bot?.color || "#3a3a40"); el.textContent = initial(bot?.name);
+  el.classList.remove("rounded", "square", "image", "emoji");
+  el.style.setProperty("--c", bot?.color || "#3a3a40");
+  if (bot?.avatarShape === "rounded" || bot?.avatarShape === "square") el.classList.add(bot.avatarShape);
+  el.replaceChildren();
+  const kind = bot?.avatarKind || "generated";
+  const glyph = () => { if (typeof bot?.glyph === "number") el.innerHTML = glyphSvg(bot.glyph); else el.textContent = initial(bot?.name); };
+  if (kind === "image" && (bot.avatarUrl || bot.avatarPreview)) {
+    el.classList.add("image");
+    const img = h("img", { alt: "", draggable: "false" }); el.append(img);
+    if (bot.avatarPreview) img.src = bot.avatarPreview;
+    else faceSrc(bot.avatarUrl).then((u) => { img.src = u; }).catch(() => { el.classList.remove("image"); glyph(); });
+  } else if (kind === "emoji" && bot.emoji) { el.classList.add("emoji"); el.textContent = bot.emoji; }
+  else if (kind === "initial") el.textContent = initial(bot?.name);
+  else glyph();
+  el.title = bot?.name || "";
   if (busy) el.append(h("span", { class: "busy", title: "Working" }));
+}
+// The order every client lists bots in: main, pinned, then latest activity.
+function sortBots(list) {
+  const t = (b) => Math.max(b.lastAt || 0, b.createdAt || 0);
+  return [...list].sort((a, b) => (b.main === true) - (a.main === true) || (b.pinned === true) - (a.pinned === true) || t(b) - t(a) || (a.createdAt || 0) - (b.createdAt || 0));
 }
 
 // ---------- cloud + host calls ----------
@@ -244,7 +295,7 @@ function onFrame(f) {
     case "bot": mergeBot(f.bot); break;
     case "bot.deleted":
       state.bots = state.bots.filter((b) => b.id !== f.botId);
-      if (state.botId === f.botId) selectBot(state.bots[0]?.id); else renderBots();
+      if (state.botId === f.botId) selectBot((state.bots.find((b) => b.main) || state.bots[0])?.id); else renderBots();
       break;
     case "thread": {
       const bot = state.bots.find((b) => b.id === f.botId);
@@ -260,7 +311,7 @@ function onFrame(f) {
 async function loadBots() {
   const { bots = [] } = await api("/api/bots");
   state.bots = bots;
-  const keep = bots.find((b) => b.id === state.botId) ? state.botId : (bots.find((b) => b.id === store.getItem("vb.bot." + state.ws.id))?.id || bots[0]?.id);
+  const keep = bots.find((b) => b.id === state.botId) ? state.botId : (bots.find((b) => b.id === store.getItem("vb.bot." + state.ws.id))?.id || bots.find((b) => b.main)?.id || bots[0]?.id);
   await selectBot(keep, { keepThread: keep === state.botId });
 }
 function mergeBot(bot) {
@@ -289,13 +340,13 @@ function renderBots(loading = false) {
     return;
   }
   const q = state.query.toLowerCase();
-  const bots = [...state.bots].filter((b) => !q || b.name.toLowerCase().includes(q) || (b.preview || "").toLowerCase().includes(q));
+  const bots = sortBots(state.bots).filter((b) => !q || b.name.toLowerCase().includes(q) || (b.preview || "").toLowerCase().includes(q) || (b.title || "").toLowerCase().includes(q));
   $("#bot-count").textContent = state.bots.length || "";
   for (const b of bots) {
     const av = h("span", { class: "avatar" }); avatar(av, b, b.busy);
     list.append(h("button", { class: "bot-row" + (b.id === state.botId ? " on" : ""), type: "button", "data-bot": b.id, onclick: () => selectBot(b.id) }, av,
       h("div", { class: "meta" },
-        h("div", { class: "top" }, h("span", { class: "name" }, b.name), h("span", { class: "time" }, timeAgo(b.lastAt))),
+        h("div", { class: "top" }, h("span", { class: "name" }, b.name), b.main ? h("span", { class: "tag", title: "Your main bot" }, "Main") : null, b.pinned && !b.main ? h("span", { html: icon("pin", "pin") }) : null, h("span", { class: "time" }, timeAgo(b.lastAt))),
         h("div", { class: "preview" + (b.busy ? " working" : "") }, b.busy ? "Working…" : (b.preview || b.title || "No messages yet")))));
   }
   if (!bots.length && q) list.append(h("div", { class: "empty" }, "No bots match “" + state.query + "”."));
@@ -315,7 +366,8 @@ async function selectBot(id, { keepThread = false } = {}) {
 function renderBotHeader() {
   const bot = currentBot(); if (!bot) return;
   avatar($("#top-avatar"), bot); $("#top-bot").textContent = bot.name;
-  avatar($("#info-avatar"), bot); $("#info-name").textContent = bot.name; $("#info-title").textContent = bot.title || bot.description || "Bot";
+  avatar($("#info-avatar"), bot); $("#info-name").textContent = bot.name; $("#info-title").textContent = bot.title || (bot.main ? "Main bot" : "Bot");
+  $("#info-desc").textContent = bot.description || ""; $("#info-desc").hidden = !bot.description;
   renderThreadTitle();
 }
 function renderThreadTitle() {
@@ -880,39 +932,113 @@ function renderLibrary() {
 }
 
 // ---------- bot editor ----------
-const COLORS = ["#1f9f5c", "#4c8dff", "#e5a33d", "#d9665b", "#9b8afb", "#46b5c8", "#d46aa8", "#8a8f98"];
-let editing = null, pickedColor = COLORS[0];
+const COLORS = ["#22a06b", "#3b82f6", "#ef6461", "#f08c3a", "#8b5cf6", "#06b6d4", "#ec4899", "#d4a017", "#14b8a6", "#f97362"];
+const EMOJIS = ["🤖", "🚀", "🧠", "🛠️", "🔍", "📈", "🎨", "✍️", "🧪", "🐛", "📦", "🛰️", "⚡", "🔥", "🌱", "🦊", "🐙", "🦉", "🐝", "🐳", "🎯", "📚", "💡", "🧭"];
+const MAX_FACE = 2 << 20;
+let editing = null;
+// draft is the look being edited; image holds a picked file until saved.
+let draft = {};
+const randomSeed = () => Math.random().toString(36).slice(2, 10);
+function freshColor() { const worn = new Set(state.bots.map((b) => (b.color || "").toLowerCase())); const free = COLORS.filter((c) => !worn.has(c)); const pool = free.length ? free : COLORS; return pool[Math.floor(Math.random() * pool.length)]; }
 function openBotDialog(bot) {
-  editing = bot || null; pickedColor = bot?.color || COLORS[state.bots.length % COLORS.length];
+  editing = bot || null;
+  draft = bot
+    ? { color: bot.color, avatarKind: bot.avatarKind || "generated", emoji: bot.emoji || "", avatarShape: bot.avatarShape || "circle", glyph: bot.glyph, glyphSeed: null, avatarUrl: bot.avatarUrl, image: null, removeImage: false }
+    : (() => { const seed = randomSeed(); return { color: freshColor(), avatarKind: "generated", emoji: "", avatarShape: "circle", glyphSeed: seed, glyph: glyphOf(seed), avatarUrl: null, image: null, removeImage: false }; })();
   $("#bot-dialog-title").textContent = bot ? `Edit ${bot.name}` : "New bot";
   $("#bot-save").textContent = bot ? "Save" : "Create bot";
   $("#agent-name").value = bot?.name || ""; $("#agent-title").value = bot?.title || ""; $("#agent-instructions").value = bot?.instructions || "";
-  $("#agent-msg").textContent = ""; $("#bot-delete").hidden = !bot || state.bots.length < 2;
-  renderSwatches(); $("#bot-dialog").showModal(); $("#agent-name").focus();
+  $("#agent-description").value = bot?.description || ""; $("#agent-pinned").checked = !!bot?.pinned;
+  $("#pin-wrap").hidden = !bot || bot.main; $("#bot-main-tag").hidden = !bot?.main;
+  $("#agent-msg").textContent = ""; $("#bot-delete").hidden = !bot || bot.main; $("#bot-duplicate").hidden = !bot;
+  $("#emoji-custom").value = draft.emoji && !EMOJIS.includes(draft.emoji) ? draft.emoji : "";
+  renderLook(); $("#bot-dialog").showModal(); $("#agent-name").focus();
 }
-function renderSwatches() {
-  $("#swatches").replaceChildren(...COLORS.map((c) => h("button", { type: "button", class: c === pickedColor ? "on" : "", style: { "--c": c }, title: c, onclick: () => { pickedColor = c; renderSwatches(); } })));
-  avatar($("#bot-preview-avatar"), { name: $("#agent-name").value || "?", color: pickedColor });
+function previewBot() {
+  const hasImage = !draft.removeImage && (draft.image || draft.avatarUrl);
+  return { name: $("#agent-name").value || "?", color: draft.color, avatarKind: draft.avatarKind === "image" && !hasImage ? "generated" : draft.avatarKind, emoji: draft.emoji, avatarShape: draft.avatarShape, glyph: draft.glyph, avatarUrl: draft.removeImage ? null : draft.avatarUrl, avatarPreview: draft.image?.url };
 }
-$("#agent-name").oninput = renderSwatches;
+function renderLook() {
+  $("#swatches").replaceChildren(...COLORS.map((c) => h("button", { type: "button", class: c === draft.color ? "on" : "", style: { "--c": c }, title: c, "aria-label": "Color " + c, onclick: () => { draft.color = c; renderLook(); } })));
+  $$("#icon-kinds button").forEach((b) => b.classList.toggle("on", b.dataset.kind === draft.avatarKind));
+  $$("#icon-shapes button").forEach((b) => b.classList.toggle("on", b.dataset.shape === draft.avatarShape));
+  $("#icon-emoji").hidden = draft.avatarKind !== "emoji"; $("#icon-image").hidden = draft.avatarKind !== "image";
+  $("#emoji-grid").replaceChildren(...EMOJIS.map((e) => h("button", { type: "button", class: e === draft.emoji ? "on" : "", onclick: () => { draft.emoji = e; $("#emoji-custom").value = ""; renderLook(); } }, e)));
+  const hasImage = !draft.removeImage && (draft.image || draft.avatarUrl);
+  $("#avatar-remove").hidden = !hasImage; $("#avatar-upload").lastChild.textContent = hasImage ? "Replace image…" : "Choose image…";
+  $("#avatar-hint").textContent = draft.image ? draft.image.name : "PNG, JPEG, GIF or WebP";
+  avatar($("#bot-preview-avatar"), previewBot());
+  $("#bot-preview-avatar").title = draft.avatarKind === "generated" ? "Click to shuffle the pattern" : "";
+}
+$("#bot-preview-avatar").onclick = () => { if (draft.avatarKind !== "generated") return; draft.glyphSeed = randomSeed(); draft.glyph = glyphOf(draft.glyphSeed); renderLook(); };
+$$("#icon-kinds button").forEach((b) => (b.onclick = () => {
+  draft.avatarKind = b.dataset.kind;
+  if (draft.avatarKind === "emoji" && !draft.emoji) draft.emoji = EMOJIS[0];
+  if (draft.avatarKind === "image" && !draft.image && (draft.removeImage || !draft.avatarUrl)) $("#avatar-file").click();
+  renderLook();
+}));
+$$("#icon-shapes button").forEach((b) => (b.onclick = () => { draft.avatarShape = b.dataset.shape; renderLook(); }));
+$("#emoji-custom").oninput = (e) => { const v = e.target.value.trim(); if (v) { draft.emoji = v; renderLook(); } };
+$("#avatar-upload").onclick = () => $("#avatar-file").click();
+$("#avatar-remove").onclick = () => { if (draft.image) URL.revokeObjectURL(draft.image.url); draft.image = null; draft.removeImage = true; draft.avatarKind = "generated"; renderLook(); };
+// Big pictures are scaled down to 512px before upload; small ones (and GIFs
+// that fit) go as they are so animation survives.
+async function prepareFace(file) {
+  if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) throw new Error("Choose a PNG, JPEG, GIF or WebP image.");
+  if (file.size <= 512 * 1024 || (file.type === "image/gif" && file.size <= MAX_FACE)) return file;
+  const bmp = await createImageBitmap(file);
+  const scale = Math.min(1, 512 / Math.max(bmp.width, bmp.height));
+  const c = document.createElement("canvas"); c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
+  c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+  const blob = await new Promise((r) => c.toBlob(r, "image/webp", 0.9)) || await new Promise((r) => c.toBlob(r, "image/png"));
+  if (!blob || blob.size > MAX_FACE) throw new Error("That image is too large. Try one under 2 MB.");
+  return blob;
+}
+$("#avatar-file").onchange = async (e) => {
+  const file = e.target.files?.[0]; e.target.value = ""; if (!file) { if (!draft.image && !draft.avatarUrl) { draft.avatarKind = "generated"; renderLook(); } return; }
+  try {
+    const blob = await prepareFace(file);
+    if (draft.image) URL.revokeObjectURL(draft.image.url);
+    draft.image = { blob, url: URL.createObjectURL(blob), name: file.name }; draft.removeImage = false; draft.avatarKind = "image"; $("#agent-msg").textContent = "";
+  } catch (err) { $("#agent-msg").textContent = err.message; }
+  renderLook();
+};
+$("#agent-name").oninput = renderLook;
 $("#new-bot").onclick = () => openBotDialog(null);
 $("#edit-bot").onclick = () => openBotDialog(currentBot());
+async function uploadFace(botId, blob) {
+  return host(`/api/bots/${enc(botId)}/avatar`, { method: "PUT", body: blob, raw: true });
+}
 $("#bot-form").onsubmit = async (e) => {
   if (e.submitter?.value !== "save") return;
   e.preventDefault();
   const name = $("#agent-name").value.trim(); if (!name) { $("#agent-msg").textContent = "Give the bot a name."; return; }
-  const body = { name, title: $("#agent-title").value.trim(), instructions: $("#agent-instructions").value.trim(), color: pickedColor };
+  const wantsImage = draft.avatarKind === "image";
+  const body = { name, title: $("#agent-title").value.trim(), description: $("#agent-description").value.trim(), instructions: $("#agent-instructions").value.trim(),
+    color: draft.color, emoji: draft.emoji || "", avatarShape: draft.avatarShape, avatarKind: wantsImage ? undefined : draft.avatarKind };
+  if (draft.glyphSeed) body.glyphSeed = draft.glyphSeed;
+  if (editing && !editing.main) body.pinned = $("#agent-pinned").checked;
+  if (wantsImage && !draft.image && (draft.removeImage || !draft.avatarUrl)) { $("#agent-msg").textContent = "Choose an image, or pick another icon."; return; }
   const btn = $("#bot-save"); btn.classList.add("loading");
   try {
-    const out = editing ? await api(`/api/bots/${enc(editing.id)}/profile`, "PATCH", body) : await api("/api/bots", "POST", body);
+    let out = editing ? await api(`/api/bots/${enc(editing.id)}/profile`, "PATCH", body) : await api("/api/bots", "POST", body);
+    const id = out.bot.id;
+    if (draft.image) out = await uploadFace(id, draft.image.blob);
+    else if (draft.removeImage && editing?.avatarUrl) out = await api(`/api/bots/${enc(id)}/avatar`, "DELETE");
+    if (wantsImage && out.bot.avatarKind !== "image") out = await api(`/api/bots/${enc(id)}/profile`, "PATCH", { avatarKind: "image" });
     mergeBot(out.bot); $("#bot-dialog").close();
-    if (!editing) await selectBot(out.bot.id); else renderBotHeader();
+    if (!editing) await selectBot(id); else renderBotHeader();
   } catch (err) { $("#agent-msg").textContent = err.message; }
   finally { btn.classList.remove("loading"); }
 };
+$("#bot-duplicate").onclick = async () => {
+  if (!editing) return;
+  try { const out = await api(`/api/bots/${enc(editing.id)}/duplicate`, "POST"); mergeBot(out.bot); $("#bot-dialog").close(); await selectBot(out.bot.id); toast(`Made ${out.bot.name}`); }
+  catch (err) { $("#agent-msg").textContent = err.message; }
+};
 $("#bot-delete").onclick = async () => {
-  if (!editing || !confirm(`Delete ${editing.name}? Its threads, files and routines are removed.`)) return;
-  try { await api(`/api/bots/${enc(editing.id)}`, "DELETE"); $("#bot-dialog").close(); state.bots = state.bots.filter((b) => b.id !== editing.id); await selectBot(state.bots[0]?.id); }
+  if (!editing || editing.main || !confirm(`Delete ${editing.name}? Its threads, files and routines are removed.`)) return;
+  try { await api(`/api/bots/${enc(editing.id)}`, "DELETE"); $("#bot-dialog").close(); state.bots = state.bots.filter((b) => b.id !== editing.id); await selectBot((state.bots.find((b) => b.main) || state.bots[0])?.id); }
   catch (err) { $("#agent-msg").textContent = err.message; }
 };
 

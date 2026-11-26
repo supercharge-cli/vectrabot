@@ -496,6 +496,9 @@ func botIntro(bot *botRecord, filesDir string) string {
 		fmt.Fprintf(&b, " Role: %s.", bot.Title)
 	}
 	b.WriteString("\n")
+	if bot.Description != "" {
+		fmt.Fprintf(&b, "About you: %s\n", bot.Description)
+	}
 	if bot.Instructions != "" {
 		b.WriteString("Follow these standing instructions from the owner for this whole conversation:\n")
 		b.WriteString(bot.Instructions)

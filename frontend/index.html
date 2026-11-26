@@ -239,6 +239,7 @@
         <span class="avatar xl" id="info-avatar"></span>
         <h2 id="info-name"></h2>
         <p id="info-title"></p>
+        <p class="info-desc" id="info-desc" hidden></p>
         <div class="row" style="margin-top:6px"><button class="btn sm" id="edit-bot" type="button"><svg class="i sm"><use href="#i-edit"/></svg>Edit</button><button class="btn sm ghost" id="info-new-thread" type="button"><svg class="i sm"><use href="#i-plus"/></svg>New thread</button></div>
       </div>
       <div class="seg"><button type="button" data-info="activity" class="on">Activity</button><button type="button" data-info="library">Library</button></div>
@@ -268,15 +269,27 @@
   <form method="dialog" id="bot-form">
     <div class="dlg-head"><h3 id="bot-dialog-title">New bot</h3><button class="btn ghost icon sm" value="cancel" formnovalidate><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="dlg-body">
-      <div class="row" style="gap:14px"><span class="avatar xl" id="bot-preview-avatar"></span><div class="grow" style="display:grid;gap:10px">
+      <div class="row" style="gap:14px;align-items:flex-start"><div class="avatar-edit"><span class="avatar xl" id="bot-preview-avatar"></span><span class="main-tag" id="bot-main-tag" hidden>Main bot</span></div><div class="grow" style="display:grid;gap:10px">
         <label class="field"><span>Name</span><input class="input" id="agent-name" maxlength="80" required placeholder="e.g. Scout" /></label>
         <label class="field"><span>Role</span><input class="input" id="agent-title" maxlength="120" placeholder="e.g. Research assistant" /></label>
       </div></div>
-      <div class="field"><span>Color</span><div class="swatches" id="swatches"></div></div>
-      <label class="field"><span>Instructions</span><textarea class="input" id="agent-instructions" rows="6" placeholder="How this bot should work: tone, focus, rules. Sent at the start of each thread."></textarea></label>
+      <div class="field"><span>Icon</span>
+        <div class="pick" id="icon-kinds" role="tablist">
+          <button type="button" data-kind="generated">Pattern</button><button type="button" data-kind="initial">Letter</button><button type="button" data-kind="emoji">Emoji</button><button type="button" data-kind="image">Image</button>
+        </div>
+        <div class="icon-pane" id="icon-emoji" hidden><div class="emoji-grid" id="emoji-grid"></div><input class="input" id="emoji-custom" maxlength="16" placeholder="Or type any emoji" style="max-width:180px" /></div>
+        <div class="icon-pane" id="icon-image" hidden><div class="row" style="gap:8px"><button class="btn sm" id="avatar-upload" type="button"><svg class="i sm"><use href="#i-upload"/></svg>Choose image…</button><button class="btn sm ghost" id="avatar-remove" type="button" hidden><svg class="i sm"><use href="#i-trash"/></svg>Remove</button><span class="hint" id="avatar-hint">PNG, JPEG, GIF or WebP</span></div><input type="file" id="avatar-file" accept="image/png,image/jpeg,image/gif,image/webp" hidden /></div>
+      </div>
+      <div class="row" style="gap:18px;flex-wrap:wrap">
+        <div class="field"><span>Color</span><div class="swatches" id="swatches"></div></div>
+        <div class="field"><span>Shape</span><div class="pick" id="icon-shapes"><button type="button" data-shape="circle">Circle</button><button type="button" data-shape="rounded">Rounded</button><button type="button" data-shape="square">Square</button></div></div>
+      </div>
+      <label class="field"><span>Description</span><textarea class="input" id="agent-description" rows="2" maxlength="500" placeholder="What this bot is for, shown in the bot list and profile."></textarea></label>
+      <label class="field"><span>Instructions</span><textarea class="input" id="agent-instructions" rows="5" placeholder="How this bot should work: tone, focus, rules. Sent at the start of each thread."></textarea></label>
+      <label class="check" id="pin-wrap" hidden><input type="checkbox" id="agent-pinned" /> Pin to the top of the bot list</label>
       <div id="agent-msg" class="error-text"></div>
     </div>
-    <div class="dlg-foot"><button class="btn danger sm" id="bot-delete" type="button" hidden><svg class="i sm"><use href="#i-trash"/></svg>Delete bot</button><div class="grow"></div><button class="btn sm ghost" value="cancel" formnovalidate>Cancel</button><button class="btn sm primary" id="bot-save" value="save">Create bot</button></div>
+    <div class="dlg-foot"><button class="btn danger sm" id="bot-delete" type="button" hidden><svg class="i sm"><use href="#i-trash"/></svg>Delete bot</button><button class="btn ghost sm" id="bot-duplicate" type="button" hidden><svg class="i sm"><use href="#i-copy"/></svg>Duplicate</button><div class="grow"></div><button class="btn sm ghost" value="cancel" formnovalidate>Cancel</button><button class="btn sm primary" id="bot-save" value="save">Create bot</button></div>
   </form>
 </dialog>
 

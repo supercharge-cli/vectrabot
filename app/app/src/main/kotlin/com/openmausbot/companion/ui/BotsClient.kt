@@ -32,6 +32,20 @@ internal data class Bot(
     val preview: String,
     val lastAt: Long,
     val threads: List<BotThread>,
+    val description: String = "",
+    /** The workspace's built-in bot: listed first, never deleted. */
+    val main: Boolean = false,
+    val pinned: Boolean = false,
+    /** generated | initial | emoji | image */
+    val avatarKind: String = "generated",
+    val emoji: String = "",
+    /** circle | rounded | square */
+    val avatarShape: String = "circle",
+    /** Host path of the uploaded image, null when there is none. */
+    val avatarUrl: String? = null,
+    /** 15-bit pattern of the generated face; -1 when the host sent none. */
+    val glyph: Int = -1,
+    val createdAt: Long = 0,
 )
 
 internal data class ToolDiff(val path: String, val oldText: String, val newText: String)
@@ -112,8 +126,26 @@ internal fun parseBot(o: JSONObject): Bot {
         threads = o.optJSONArray("tasks").mapObjects { t ->
             BotThread(t.str("threadId"), t.str("title").ifBlank { "New thread" }, t.optBoolean("busy"), t.str("preview"), t.optLong("updatedAt"), t.optBoolean("pinned"))
         },
+        description = o.str("description"), main = o.optBoolean("main"), pinned = o.optBoolean("pinned"),
+        avatarKind = o.str("avatarKind").ifBlank { "generated" }, emoji = o.str("emoji"), avatarShape = o.str("avatarShape").ifBlank { "circle" },
+        avatarUrl = o.str("avatarUrl").ifBlank { null }, glyph = if (o.has("glyph") && !o.isNull("glyph")) o.optInt("glyph", -1) else -1,
+        createdAt = o.optLong("createdAt"),
     )
 }
+
+/** The generated face's pattern for a seed; the host and the PC app compute the same value. */
+internal fun glyphOf(seed: String): Int {
+    var x = 0x811c9dc5.toInt()
+    for (b in seed.toByteArray(Charsets.UTF_8)) { x = x xor (b.toInt() and 0xff); x *= 0x01000193 }
+    var g = x and 0x7fff
+    while (Integer.bitCount(g) < 4 || Integer.bitCount(g) > 11) g = (g * 31 + 0x2b5d) and 0x7fff
+    return g
+}
+
+/** The order every client lists bots in: the main bot, pinned ones, then latest activity. */
+internal fun sortBots(list: List<Bot>): List<Bot> = list.sortedWith(
+    compareByDescending<Bot> { it.main }.thenByDescending { it.pinned }.thenByDescending { maxOf(it.lastAt, it.createdAt) }.thenBy { it.createdAt },
+)
 
 internal fun parseMessage(o: JSONObject): BotMessage {
     val tool = o.optJSONObject("tool")?.let { t ->
@@ -223,7 +255,31 @@ internal class BotsClient(
 
     fun bots(): List<Bot> = call("GET", "/api/bots").optJSONArray("bots").mapObjects(::parseBot)
     fun createBot(name: String, title: String, instructions: String, color: String): Bot =
-        parseBot(call("POST", "/api/bots", JSONObject().put("name", name).put("title", title).put("instructions", instructions).put("color", color)).getJSONObject("bot"))
+        createBot(JSONObject().put("name", name).put("title", title).put("instructions", instructions).put("color", color))
+    fun createBot(fields: JSONObject): Bot = parseBot(call("POST", "/api/bots", fields).getJSONObject("bot"))
+    fun duplicateBot(id: String): Bot = parseBot(call("POST", "/api/bots/${enc(id)}/duplicate").getJSONObject("bot"))
+    /** Stores [bytes] (PNG, JPEG, GIF or WebP) as the bot's face. */
+    fun uploadAvatar(id: String, bytes: ByteArray, retried: Boolean = false): Bot {
+        val req = Request.Builder().url(host.trimEnd('/') + "/api/bots/${enc(id)}/avatar").header("authorization", "Bearer $session")
+            .put(bytes.toRequestBody("application/octet-stream".toMediaType())).build()
+        http.newCall(req).execute().use { res ->
+            if (res.code == 401 && !retried && reattach?.invoke() == true) return uploadAvatar(id, bytes, true)
+            val text = res.body?.string().orEmpty()
+            val json = if (text.trimStart().startsWith("{")) JSONObject(text) else JSONObject()
+            if (!res.isSuccessful) throw HostError(res.code, json.optString("error").ifBlank { "Upload failed (${res.code})" })
+            return parseBot(json.getJSONObject("bot"))
+        }
+    }
+    fun deleteAvatar(id: String): Bot = parseBot(call("DELETE", "/api/bots/${enc(id)}/avatar").getJSONObject("bot"))
+    /** The stored face image at a host path from [Bot.avatarUrl]. */
+    fun avatarBytes(path: String, retried: Boolean = false): ByteArray? {
+        if (!path.startsWith("/api/bots/")) return null
+        val req = Request.Builder().url(host.trimEnd('/') + path).header("authorization", "Bearer $session").get().build()
+        http.newCall(req).execute().use { res ->
+            if (res.code == 401 && !retried && reattach?.invoke() == true) return avatarBytes(path, true)
+            return if (res.isSuccessful) res.body?.bytes() else null
+        }
+    }
     fun updateBot(id: String, fields: JSONObject): Bot = parseBot(call("PATCH", "/api/bots/${enc(id)}", fields).getJSONObject("bot"))
     fun deleteBot(id: String) { call("DELETE", "/api/bots/${enc(id)}") }
     fun newThread(botId: String, title: String = ""): String = call("POST", "/api/bots/${enc(botId)}/tasks", JSONObject().put("title", title)).optString("threadId")

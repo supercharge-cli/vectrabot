@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,10 @@ import (
 
 type botView struct {
 	botRecord
+	// AvatarURL is the stored image on this host, null when there is none.
+	AvatarURL *string `json:"avatarUrl"`
+	// Glyph is the 15-bit pattern of the generated face (see glyphOf).
+	Glyph   int          `json:"glyph"`
 	Busy    bool         `json:"busy"`
 	Preview string       `json:"preview"`
 	LastAt  int64        `json:"lastAt"`
@@ -47,7 +52,7 @@ func previewOf(list []*message) (string, int64) {
 }
 
 func (h *botHub) viewLocked(b *botRecord) botView {
-	v := botView{botRecord: *b, Tasks: []threadView{}}
+	v := botView{botRecord: *b, Tasks: []threadView{}, AvatarURL: avatarURL(b), Glyph: glyphOf(cmp.Or(b.GlyphSeed, b.ID))}
 	for _, t := range h.store.threadsOfLocked(b.ID) {
 		tv := threadView{threadRecord: *t, Busy: h.turning[t.ID]}
 		tv.Preview, _ = previewOf(h.store.messagesLocked(t.ID))
@@ -103,6 +108,11 @@ type botInput struct {
 	Model          *string `json:"model"`
 	PermissionMode *string `json:"permissionMode"`
 	Mode           *string `json:"mode"`
+	AvatarKind     *string `json:"avatarKind"`
+	Emoji          *string `json:"emoji"`
+	AvatarShape    *string `json:"avatarShape"`
+	Pinned         *bool   `json:"pinned"`
+	GlyphSeed      *string `json:"glyphSeed"`
 }
 
 var permissionModes = map[string]bool{"ask": true, "auto": true, "always-approve": true}
@@ -122,7 +132,50 @@ func applyBotInput(b *botRecord, in botInput) error {
 	set(&b.Title, in.Title, 120)
 	set(&b.Description, in.Description, 500)
 	set(&b.Instructions, in.Instructions, 20000)
-	set(&b.Color, in.Color, 16)
+	if in.Color != nil && strings.TrimSpace(*in.Color) != "" {
+		c := strings.ToLower(strings.TrimSpace(*in.Color))
+		if !hexColor.MatchString(c) {
+			return errors.New("color must be a #rrggbb hex colour")
+		}
+		b.Color = c
+	}
+	if in.Emoji != nil {
+		e := strings.TrimSpace(*in.Emoji)
+		if e != "" && !validEmoji(e) {
+			return errors.New("emoji must be a short emoji or symbol")
+		}
+		b.Emoji = e
+	}
+	if in.AvatarShape != nil {
+		if !avatarShapes[*in.AvatarShape] {
+			return errors.New("avatarShape must be circle, rounded or square")
+		}
+		b.AvatarShape = *in.AvatarShape
+	}
+	if in.AvatarKind != nil {
+		k := *in.AvatarKind
+		switch {
+		case !avatarKinds[k]:
+			return errors.New("avatarKind must be generated, initial, emoji or image")
+		case k == "image" && b.AvatarExt == "":
+			return errors.New("upload an image first")
+		case k == "emoji" && b.Emoji == "":
+			return errors.New("pick an emoji first")
+		}
+		b.AvatarKind = k
+	}
+	if b.AvatarKind == "emoji" && b.Emoji == "" {
+		b.AvatarKind = "generated"
+	}
+	if in.Pinned != nil {
+		b.Pinned = *in.Pinned
+	}
+	if in.GlyphSeed != nil {
+		if *in.GlyphSeed != "" && !glyphSeedRe.MatchString(*in.GlyphSeed) {
+			return errors.New("glyphSeed must be 1-32 letters, digits, _ or -")
+		}
+		b.GlyphSeed = *in.GlyphSeed
+	}
 	set(&b.Settings.Model, in.Model, 200)
 	if in.PermissionMode != nil {
 		if !permissionModes[*in.PermissionMode] {
@@ -147,12 +200,10 @@ func registerBotRoutes(guard func(string, http.HandlerFunc), h *botHub, routines
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "service": "sandbox-host", "api": 1})
 	})
 	guard("GET /api/events", h.events.serve)
+	registerAvatarRoutes(guard, h)
 	guard("GET /api/bots", func(w http.ResponseWriter, _ *http.Request) {
 		h.store.mu.Lock()
-		views := make([]botView, 0, len(h.store.bots))
-		for _, b := range h.store.bots {
-			views = append(views, h.viewLocked(b))
-		}
+		views := h.sortedViewsLocked()
 		h.store.mu.Unlock()
 		writeJSON(w, http.StatusOK, map[string]any{"bots": views, "groups": []any{}, "cursor": h.events.cursor()})
 	})
@@ -162,6 +213,11 @@ func registerBotRoutes(guard func(string, http.HandlerFunc), h *botHub, routines
 			return
 		}
 		h.store.mu.Lock()
+		if len(h.store.bots) >= maxBots {
+			h.store.mu.Unlock()
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "a workspace holds at most " + strconv.Itoa(maxBots) + " bots"})
+			return
+		}
 		name := ""
 		if in.Name != nil {
 			name = *in.Name
@@ -169,6 +225,8 @@ func registerBotRoutes(guard func(string, http.HandlerFunc), h *botHub, routines
 		b := h.store.createLocked(name, "", "")
 		if err := applyBotInput(b, in); err != nil {
 			h.store.bots = h.store.bots[:len(h.store.bots)-1]
+			delete(h.store.threads, b.ThreadID)
+			delete(h.store.messages, b.ThreadID)
 			h.store.mu.Unlock()
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
@@ -209,7 +267,7 @@ func registerBotRoutes(guard func(string, http.HandlerFunc), h *botHub, routines
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		profileChanged := next.Instructions != b.Instructions || next.Name != b.Name || next.Title != b.Title
+		profileChanged := next.Instructions != b.Instructions || next.Name != b.Name || next.Title != b.Title || next.Description != b.Description
 		next.UpdatedAt = nowMillis()
 		*b = next
 		if profileChanged {
@@ -230,6 +288,11 @@ func registerBotRoutes(guard func(string, http.HandlerFunc), h *botHub, routines
 	guard("DELETE /api/bots/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		h.store.mu.Lock()
+		if b := h.store.botLocked(id); b != nil && b.Main {
+			h.store.mu.Unlock()
+			writeJSON(w, http.StatusConflict, map[string]string{"error": b.Name + ": " + errMainBot.Error()})
+			return
+		}
 		if len(h.store.bots) <= 1 {
 			h.store.mu.Unlock()
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "keep at least one bot"})
@@ -245,6 +308,9 @@ func registerBotRoutes(guard func(string, http.HandlerFunc), h *botHub, routines
 			h.store.mu.Unlock()
 			notFound(w, "bot")
 			return
+		}
+		if gone := h.store.bots[idx]; gone.AvatarExt != "" {
+			_ = os.Remove(h.store.avatarPath(gone))
 		}
 		h.store.bots = append(h.store.bots[:idx], h.store.bots[idx+1:]...)
 		for tid, t := range h.store.threads {

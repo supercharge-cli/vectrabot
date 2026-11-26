@@ -43,7 +43,7 @@ internal object Vx {
     val border = BorderStroke(1.dp, line)
     val card = RoundedCornerShape(12.dp)
     val small = RoundedCornerShape(8.dp)
-    val swatches = listOf("#3b82f6", "#22a06b", "#e2a640", "#ef6461", "#a78bfa", "#14b8a6", "#f472b6", "#94a3b8")
+    val swatches = listOf("#22a06b", "#3b82f6", "#ef6461", "#f08c3a", "#8b5cf6", "#06b6d4", "#ec4899", "#d4a017", "#14b8a6", "#f97362")
 }
 
 internal val vectraColors = darkColorScheme(
@@ -74,19 +74,6 @@ internal fun VectraTheme(content: @Composable () -> Unit) = MaterialTheme(colorS
 
 internal fun parseHex(hex: String, fallback: Color = Color(0xFF3B82F6)): Color =
     runCatching { Color(android.graphics.Color.parseColor(if (hex.startsWith("#")) hex else "#$hex")) }.getOrDefault(fallback)
-
-/** A round colored avatar with the bot's initial. */
-@Composable
-internal fun BotAvatarDot(name: String, color: String, size: Dp = 36.dp, busy: Boolean = false) {
-    Box(Modifier.size(size), contentAlignment = Alignment.Center) {
-        Box(Modifier.size(size).background(parseHex(color), CircleShape), contentAlignment = Alignment.Center) {
-            Text(name.trim().take(1).uppercase().ifBlank { "B" }, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = (size.value * 0.42f).sp)
-        }
-        if (busy) Box(
-            Modifier.align(Alignment.BottomEnd).size((size.value * 0.3f).dp).background(Vx.warn, CircleShape).border(2.dp, Vx.panel, CircleShape),
-        )
-    }
-}
 
 internal fun timeAgo(ms: Long, now: Long = System.currentTimeMillis()): String {
     if (ms <= 0) return ""

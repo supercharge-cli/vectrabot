@@ -26,16 +26,30 @@ type botSettings struct {
 }
 
 type botRecord struct {
-	ID           string      `json:"id"`
-	Name         string      `json:"name"`
-	Title        string      `json:"title"`
-	Description  string      `json:"description"`
-	Instructions string      `json:"instructions"`
-	Color        string      `json:"color"`
-	Settings     botSettings `json:"settings"`
-	ThreadID     string      `json:"threadId"`
-	CreatedAt    int64       `json:"createdAt"`
-	UpdatedAt    int64       `json:"updatedAt"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Title        string `json:"title"`
+	Description  string `json:"description"`
+	Instructions string `json:"instructions"`
+	Color        string `json:"color"`
+	// Main marks the workspace's built-in bot: always listed first, never
+	// deleted. Exactly one bot carries it.
+	Main   bool `json:"main"`
+	Pinned bool `json:"pinned"`
+	// AvatarKind is how the bot's face is drawn: generated (a pattern from
+	// its id), initial, emoji or image. AvatarShape crops it.
+	AvatarKind  string `json:"avatarKind"`
+	Emoji       string `json:"emoji,omitempty"`
+	AvatarShape string `json:"avatarShape"`
+	// GlyphSeed picks the generated pattern; empty uses the bot's id.
+	GlyphSeed string `json:"glyphSeed,omitempty"`
+	// AvatarExt and AvatarRev name the stored image; empty when none.
+	AvatarExt string      `json:"avatarExt,omitempty"`
+	AvatarRev int64       `json:"avatarRev,omitempty"`
+	Settings  botSettings `json:"settings"`
+	ThreadID  string      `json:"threadId"`
+	CreatedAt int64       `json:"createdAt"`
+	UpdatedAt int64       `json:"updatedAt"`
 }
 
 type threadRecord struct {
@@ -165,13 +179,16 @@ func openBotStore(root string, seed []agentRecord) *botStore {
 			}
 		}
 	}
-	if len(s.bots) == 0 {
+	seeded := len(s.bots) == 0
+	if seeded {
 		for _, agent := range seed {
 			s.createLocked(agent.Name, agent.Instructions, agent.ID)
 		}
 		if len(s.bots) == 0 {
 			s.createLocked("Chief", "", "")
 		}
+	}
+	if s.normalizeLocked() || seeded {
 		_ = s.saveLocked()
 	}
 	return s
@@ -201,8 +218,6 @@ func writeFileAtomic(path string, raw []byte) error {
 	return os.Rename(tmp, path)
 }
 
-var botColors = []string{"#4c8dff", "#3fb68b", "#e5a33d", "#d9665b", "#9b8afb", "#46b5c8"}
-
 func (s *botStore) createLocked(name, instructions, id string) *botRecord {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -212,7 +227,8 @@ func (s *botStore) createLocked(name, instructions, id string) *botRecord {
 		id = newID("bot_")
 	}
 	now := nowMillis()
-	bot := &botRecord{ID: id, Name: name, Instructions: strings.TrimSpace(instructions), Color: botColors[len(s.bots)%len(botColors)], CreatedAt: now, UpdatedAt: now,
+	bot := &botRecord{ID: id, Name: name, Instructions: strings.TrimSpace(instructions), Color: s.freshColorLocked(), CreatedAt: now, UpdatedAt: now,
+		AvatarKind: "generated", AvatarShape: "circle", Main: len(s.bots) == 0,
 		Settings: botSettings{PermissionMode: "ask", Mode: "default"}}
 	s.bots = append(s.bots, bot)
 	t := s.newThreadLocked(bot, "")

@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -121,7 +122,7 @@ internal fun BotHome(state: BotsState, workspace: String, email: String, onOpen:
         }
         if (searching) OutlinedTextField(query, { query = it }, placeholder = { Text("Search bots") }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp))
         Text("BOTS", color = Vx.text3, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 4.dp))
-        val shown = state.bots.filter { query.isBlank() || it.name.contains(query, true) || it.title.contains(query, true) }
+        val shown = sortBots(state.bots).filter { query.isBlank() || it.name.contains(query, true) || it.title.contains(query, true) || it.description.contains(query, true) }
         LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("bot-list"), contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp)) {
             if (state.loading && state.bots.isEmpty()) items(3) { SkeletonRow() }
             items(shown, key = { it.id }) { b -> BotRow(b, b.id == state.botId) { onOpen(b) } }
@@ -164,10 +165,14 @@ private fun SkeletonRow() {
 @Composable
 private fun BotRow(b: Bot, selected: Boolean, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clip(Vx.card).background(if (selected) Vx.selected else Color.Transparent).clickable(onClick = onClick).padding(horizontal = 10.dp, vertical = 10.dp).testTag("bot-${b.name}"), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-        BotAvatarDot(b.name, b.color, 40.dp, busy = b.busy)
+        BotFace(b, 40.dp, busy = b.busy)
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(b.name, color = Vx.text, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(b.name, color = Vx.text, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    if (b.main) Text("Main", color = Vx.accentHi, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.testTag("main-${b.name}").clip(CircleShape).background(Vx.accentSoft).padding(horizontal = 7.dp, vertical = 1.dp))
+                    else if (b.pinned) Icon(Icons.Default.Star, "Pinned", tint = Vx.text3, modifier = Modifier.size(12.dp))
+                }
                 Text(timeAgo(b.lastAt), color = Vx.text3, fontSize = 11.sp)
             }
             Text(if (b.busy) "Working…" else b.preview.ifBlank { b.title.ifBlank { "No messages yet" } }, color = if (b.busy) Vx.warn else Vx.text2, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -195,9 +200,10 @@ internal fun BotInfoPanel(state: BotsState, onBack: () -> Unit, onEdit: () -> Un
         PanelTopBar("", onBack)
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                BotAvatarDot(bot.name, bot.color, 72.dp)
+                BotFace(bot, 72.dp)
                 Text(bot.name, color = Vx.text, fontSize = 19.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 6.dp))
-                Text(bot.title.ifBlank { "Bot" }, color = Vx.text2, fontSize = 13.sp)
+                Text(bot.title.ifBlank { if (bot.main) "Main bot" else "Bot" }, color = Vx.text2, fontSize = 13.sp)
+                if (bot.description.isNotBlank()) Text(bot.description, color = Vx.text3, fontSize = 12.5.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 6.dp)) {
                     QuietButton("Edit", Icons.Default.Edit, onClick = onEdit)
                     QuietButton("New thread", Icons.Default.Add, onClick = onNewThread)
@@ -306,42 +312,6 @@ internal fun Picker(label: String, value: String, choices: List<ConfigChoice>, o
             }
         }
     }
-}
-
-/** Create or edit a bot: name, role, instructions and color. */
-@Composable
-internal fun BotEditorDialog(existing: Bot?, canDelete: Boolean, onDismiss: () -> Unit, onSave: (String, String, String, String) -> Unit, onDelete: () -> Unit) {
-    var name by remember { mutableStateOf(existing?.name.orEmpty()) }
-    var title by remember { mutableStateOf(existing?.title.orEmpty()) }
-    var instructions by remember { mutableStateOf(existing?.instructions.orEmpty()) }
-    var color by remember { mutableStateOf(existing?.color?.ifBlank { null } ?: Vx.swatches[0]) }
-    var confirmDelete by remember { mutableStateOf(false) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = Vx.raised,
-        title = { Text(if (existing == null) "New bot" else "Edit ${existing.name}", fontSize = 17.sp, fontWeight = FontWeight.SemiBold) },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth().testTag("bot-name"))
-                OutlinedTextField(title, { title = it }, label = { Text("Role") }, placeholder = { Text("e.g. Code reviewer") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(instructions, { instructions = it }, label = { Text("Instructions") }, minLines = 3, maxLines = 8, modifier = Modifier.fillMaxWidth())
-                Text("Color", color = Vx.text2, fontSize = 12.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Vx.swatches.forEach { s ->
-                        Box(Modifier.size(26.dp).clip(CircleShape).background(parseHex(s)).border(2.dp, if (s == color) Vx.text else Color.Transparent, CircleShape).clickable { color = s })
-                    }
-                }
-                if (existing != null && canDelete) {
-                    if (confirmDelete) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Delete ${existing.name} and its threads?", color = Vx.bad, fontSize = 13.sp, modifier = Modifier.weight(1f))
-                        QuietButton("Delete", danger = true, onClick = onDelete)
-                    } else QuietButton("Delete bot", Icons.Default.Delete, danger = true) { confirmDelete = true }
-                }
-            }
-        },
-        confirmButton = { PrimaryButton(if (existing == null) "Create bot" else "Save", enabled = name.isNotBlank(), modifier = Modifier.testTag("bot-save")) { onSave(name.trim(), title.trim(), instructions.trim(), color) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = Vx.text2) } },
-    )
 }
 
 /** The CLI's own provider setup, over the host: keys, sign-in, base URL and model. */

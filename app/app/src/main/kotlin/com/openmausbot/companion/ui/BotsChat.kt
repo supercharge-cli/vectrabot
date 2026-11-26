@@ -144,9 +144,9 @@ private fun <T> androidx.compose.foundation.lazy.LazyListScope.itemsIndexed(item
 @Composable
 private fun EmptyChat(bot: Bot) {
     Column(Modifier.fillMaxWidth().padding(top = 64.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        BotAvatarDot(bot.name, bot.color, 56.dp)
+        BotFace(bot, 56.dp)
         Text(bot.name, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = Vx.text)
-        Text(bot.title.ifBlank { "Ask it to build, fix or run something in this workspace." }, color = Vx.text2, fontSize = 14.sp)
+        Text(bot.description.ifBlank { bot.title.ifBlank { "Ask it to build, fix or run something in this workspace." } }, color = Vx.text2, fontSize = 14.sp)
     }
 }
 
@@ -176,7 +176,7 @@ private fun MessageView(
     }
     Column(Modifier.fillMaxWidth()) {
         if (showLabel) Row(Modifier.padding(top = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            BotAvatarDot(bot.name, bot.color, 18.dp)
+            BotFace(bot, 18.dp)
             Text(bot.name, color = Vx.text2, fontSize = 12.sp, fontWeight = FontWeight.Medium)
             Text(clockTime(m.at), color = Vx.text3, fontSize = 11.sp)
         }

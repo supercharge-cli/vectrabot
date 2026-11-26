@@ -305,6 +305,8 @@ private fun WorkspaceView(
     fun openBot(b: Bot, thread: String? = null) { bots.select(b, thread); tab = 0; panel = Panel.Chat }
     fun act(block: suspend () -> Unit) = scope.launch { try { block() } catch (e: CancellationException) { throw e } catch (e: Exception) { toast = e.message ?: "Request failed" } }
 
+    val faces = remember(bots) { BotFaces(bots.client) }
+    androidx.compose.runtime.CompositionLocalProvider(LocalBotFaces provides faces) {
     Box(Modifier.fillMaxSize().background(Vx.bg)) {
         when (panel) {
             Panel.Home -> BotHome(bots, sandbox.name, email, onOpen = { openBot(it) }, onNewBot = { creating = true },
@@ -320,7 +322,7 @@ private fun WorkspaceView(
                 Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     IconAction(Icons.Default.ArrowBack, "Back") { panel = Panel.Home }
                     if (bot != null) Row(Modifier.weight(1f).clickable { panel = Panel.Info }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        BotAvatarDot(bot.name, bot.color, 32.dp, busy = bot.busy)
+                        BotFace(bot, 32.dp, busy = bot.busy)
                         Column {
                             Text(bot.name, color = Vx.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
                             Text(bot.threads.firstOrNull { it.id == bots.threadId }?.title ?: "New thread", color = Vx.text3, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -344,20 +346,28 @@ private fun WorkspaceView(
     }
     if (creating || editing != null) {
         val existing = editing
-        BotEditorDialog(existing, canDelete = bots.bots.size > 1, onDismiss = { creating = false; editing = null },
-            onSave = { name, title, instructions, color ->
+        BotEditorDialog(existing, takenColors = bots.bots.map { it.color.lowercase() }, onDismiss = { creating = false; editing = null },
+            onSave = { d ->
                 act {
-                    if (existing == null) {
-                        val b = withContext(Dispatchers.IO) { bots.client.createBot(name, title, instructions, color) }
-                        bots.mergeBot(b); openBot(b)
-                    } else {
-                        bots.mergeBot(withContext(Dispatchers.IO) { bots.client.updateBot(existing.id, JSONObject().put("name", name).put("title", title).put("instructions", instructions).put("color", color)) })
-                    }
+                    val fields = JSONObject().put("name", d.name).put("title", d.title).put("description", d.description).put("instructions", d.instructions)
+                        .put("color", d.color).put("emoji", d.emoji).put("avatarShape", d.avatarShape)
+                    if (d.avatarKind != "image") fields.put("avatarKind", d.avatarKind)
+                    d.glyphSeed?.let { fields.put("glyphSeed", it) }
+                    if (existing != null && !existing.main) fields.put("pinned", d.pinned)
+                    var b = withContext(Dispatchers.IO) { if (existing == null) bots.client.createBot(fields) else bots.client.updateBot(existing.id, fields) }
+                    val img = d.image
+                    if (img != null) b = withContext(Dispatchers.IO) { bots.client.uploadAvatar(b.id, img) }
+                    else if (d.removeImage && existing?.avatarUrl != null) b = withContext(Dispatchers.IO) { bots.client.deleteAvatar(b.id) }
+                    if (d.avatarKind == "image" && b.avatarKind != "image") b = withContext(Dispatchers.IO) { bots.client.updateBot(b.id, JSONObject().put("avatarKind", "image")) }
+                    bots.mergeBot(b)
+                    if (existing == null) openBot(b)
                     creating = false; editing = null
                 }
             },
-            onDelete = { act { withContext(Dispatchers.IO) { bots.client.deleteBot(existing!!.id) }; bots.bots = bots.bots.filterNot { it.id == existing!!.id }; editing = null; panel = Panel.Home } },
+            onDelete = { act { withContext(Dispatchers.IO) { bots.client.deleteBot(existing!!.id) }; bots.bots = bots.bots.filterNot { it.id == existing!!.id }; bots.botId = ""; editing = null; panel = Panel.Home } },
+            onDuplicate = { act { val b = withContext(Dispatchers.IO) { bots.client.duplicateBot(existing!!.id) }; bots.mergeBot(b); editing = null; openBot(b); toast = "Made ${b.name}" } },
         )
+    }
     }
 }
 

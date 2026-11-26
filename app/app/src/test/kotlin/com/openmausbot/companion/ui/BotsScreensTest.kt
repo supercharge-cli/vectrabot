@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.background
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -44,9 +45,9 @@ class BotsScreensTest {
     private val requests = CopyOnWriteArrayList<Pair<String, String>>()
 
     private val bots = """{"bots":[
-      {"id":"b1","name":"Chief","title":"Lead engineer","color":"#3b82f6","settings":{"model":"","permissionMode":"ask","mode":"default"},"threadId":"t1","busy":false,"preview":"Pushed the fix and CI is green.","lastAt":${System.currentTimeMillis() - 120_000},"tasks":[{"threadId":"t1","title":"Fix the failing build","busy":false,"preview":"","updatedAt":${System.currentTimeMillis() - 120_000}},{"threadId":"t9","title":"Landing page copy","updatedAt":${System.currentTimeMillis() - 7_200_000}}]},
-      {"id":"b2","name":"Reviewer","title":"Code reviewer","color":"#22a06b","settings":{},"threadId":"t2","busy":true,"preview":"","lastAt":${System.currentTimeMillis() - 30_000},"tasks":[{"threadId":"t2","title":"Review PR","busy":true}]},
-      {"id":"b3","name":"Ops","title":"Deploys and alerts","color":"#e2a640","settings":{},"threadId":"t3","preview":"All services healthy.","lastAt":${System.currentTimeMillis() - 86_400_000 * 2},"tasks":[]}
+      {"id":"b1","name":"Chief","title":"Lead engineer","color":"#3b82f6","main":true,"glyph":2479,"avatarKind":"generated","avatarShape":"circle","description":"Runs the workspace","settings":{"model":"","permissionMode":"ask","mode":"default"},"threadId":"t1","busy":false,"preview":"Pushed the fix and CI is green.","lastAt":${System.currentTimeMillis() - 120_000},"tasks":[{"threadId":"t1","title":"Fix the failing build","busy":false,"preview":"","updatedAt":${System.currentTimeMillis() - 120_000}},{"threadId":"t9","title":"Landing page copy","updatedAt":${System.currentTimeMillis() - 7_200_000}}]},
+      {"id":"b2","name":"Reviewer","title":"Code reviewer","color":"#22a06b","glyph":10540,"avatarKind":"emoji","emoji":"🔍","avatarShape":"rounded","pinned":true,"settings":{},"threadId":"t2","busy":true,"preview":"","lastAt":${System.currentTimeMillis() - 30_000},"tasks":[{"threadId":"t2","title":"Review PR","busy":true}]},
+      {"id":"b3","name":"Ops","title":"Deploys and alerts","color":"#f08c3a","glyph":18499,"avatarKind":"image","avatarUrl":"/api/bots/b3/avatar?v=1","avatarShape":"square","settings":{},"threadId":"t3","preview":"All services healthy.","lastAt":${System.currentTimeMillis() - 86_400_000 * 2},"tasks":[]}
     ]}"""
     private val now = System.currentTimeMillis()
     private val messages = """{"hasMore":false,"session":{"threadId":"t1","open":true,"busy":false,"mode":"default","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"mistral-medium-latest","options":[{"value":"mistral-medium-latest","name":"mistral · mistral-medium-latest"}]},{"id":"permission_mode","name":"Permissions","type":"select","currentValue":"ask","options":[{"value":"ask","name":"Ask"},{"value":"auto","name":"Auto"}]}],"commands":[{"name":"context","description":"Show context usage"},{"name":"compact","description":"Compress history"}],"usage":{"usedTokens":8000,"maxTokens":128000}},"messages":[
@@ -64,12 +65,18 @@ class BotsScreensTest {
       {"id":"p4","role":"bot","kind":"notice","error":true,"errorCode":-32000,"action":"providers","text":"The provider rejected the credentials (401). Sign in again or paste a new API key.","at":${now - 70_000}}
     ]}"""
 
+    private val facePng: ByteArray by lazy {
+        val bmp = Bitmap.createBitmap(48, 48, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.rgb(240, 140, 58)) }
+        java.io.ByteArrayOutputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it); it.toByteArray() }
+    }
+
     @Before fun start() {
         server = MockWebServer()
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
                 val path = request.path.orEmpty()
                 requests += path to request.body.readUtf8()
+                if (path.startsWith("/api/bots/b3/avatar")) return MockResponse().setHeader("content-type", "image/png").setBody(okio.Buffer().write(facePng))
                 return MockResponse().setBody(when {
                     path.startsWith("/api/bots") && request.method == "GET" -> bots
                     path.startsWith("/api/threads/t1/messages") -> messages
@@ -112,6 +119,41 @@ class BotsScreensTest {
         shot("1-bots")
         compose.onNodeWithTag("bot-Reviewer").performClick()
         assertEquals("b2", opened)
+    }
+
+    @Test fun mainBotFirstAndEveryBotShowsItsOwnFace() {
+        val st = state()
+        compose.setContent { VectraTheme { androidx.compose.runtime.CompositionLocalProvider(LocalBotFaces provides BotFaces(st.client)) { BotHome(st, "Vectrabot demo", "me@example.com", onOpen = {}, onNewBot = {}, onProviders = {}, onRoutines = {}, onWorkspaces = {}, onSignOut = {}) } } }
+        compose.onNodeWithTag("main-Chief", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithText("🔍").assertIsDisplayed()
+        compose.waitUntil(5_000) { requests.any { it.first.startsWith("/api/bots/b3/avatar") } }
+        for (n in listOf("Chief", "Reviewer", "Ops")) compose.onNodeWithTag("face-$n", useUnmergedTree = true).assertIsDisplayed()
+        shot("8-bot-faces")
+        val order = sortBots(st.bots).map { it.name }
+        assertEquals(listOf("Chief", "Reviewer", "Ops"), order)
+    }
+
+    @Test fun editorPicksAnIconShapeAndColour() {
+        val st = state()
+        val ed = BotEditorState(st.bots.first { it.id == "b3" }, emptyList())
+        compose.setContent { VectraTheme { Box(Modifier.fillMaxSize().background(Vx.raised)) { androidx.compose.foundation.layout.Column(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState())) { BotEditorForm(ed, onDelete = {}, onDuplicate = {}) } } } }
+        compose.onNodeWithText("Delete bot").assertIsDisplayed()
+        compose.onNodeWithTag("kind-emoji").performClick()
+        compose.onNodeWithTag("emoji-🚀").performClick()
+        compose.onNodeWithTag("shape-rounded").performClick()
+        compose.onNodeWithTag("swatch-#8b5cf6").performClick()
+        compose.onNodeWithTag("bot-description").performTextInput("Ships releases")
+        shot("9-bot-editor")
+        val d = compose.runOnIdle { ed.draft() }!!
+        assertEquals("emoji", d.avatarKind); assertEquals("🚀", d.emoji); assertEquals("rounded", d.avatarShape); assertEquals("#8b5cf6", d.color)
+        assertTrue(d.description.startsWith("Ships releases"))
+    }
+
+    @Test fun mainBotEditorHasNoDelete() {
+        val st = state()
+        compose.setContent { VectraTheme { BotEditorForm(BotEditorState(st.bots.first { it.main }, emptyList()), onDelete = {}, onDuplicate = {}) } }
+        compose.onNodeWithText("Main bot").assertIsDisplayed()
+        assertTrue(compose.onAllNodesWithText("Delete bot").fetchSemanticsNodes().isEmpty())
     }
 
     @Test fun chatRendersToolsDiffsAndAnswersAPermission() {

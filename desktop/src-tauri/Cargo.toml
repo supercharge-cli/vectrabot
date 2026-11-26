@@ -1,6 +1,6 @@
 [package]
 name = "vectrabot"
-version = "1.0.1"
+version = "1.0.2"
 description = "Vectrabot desktop client"
 authors = ["Vectrabot"]
 edition = "2021"
