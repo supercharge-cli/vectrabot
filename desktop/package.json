@@ -1,0 +1,14 @@
+{
+  "name": "vectrabot-desktop",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Vectrabot desktop client for Vectra Cloud",
+  "scripts": {
+    "tauri": "tauri",
+    "build": "tauri build",
+    "build:rpm": "tauri build --bundles rpm"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.6"
+  }
+}

@@ -1,1 +1,4 @@
 backend/sandbox-host
+desktop/src-tauri/target
+desktop/node_modules
+desktop/src-tauri/gen

@@ -1,0 +1,17 @@
+[package]
+name = "vectrabot"
+version = "1.0.0"
+description = "Vectrabot desktop client"
+authors = ["Vectrabot"]
+edition = "2021"
+publish = false
+
+[lib]
+name = "vectrabot_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
