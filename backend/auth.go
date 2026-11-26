@@ -110,6 +110,26 @@ func authorized(r *http.Request, tokens *tokenStore) bool {
 	return false
 }
 
+// allowBrowsers lets the computer app call /v1 from its own origin. Every call
+// carries a bearer session and no cookies are used, so any origin may ask but
+// none gains access without a session.
+func allowBrowsers(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v1/") && r.Header.Get("Origin") != "" {
+			h := w.Header()
+			h.Set("Access-Control-Allow-Origin", "*")
+			h.Set("Access-Control-Allow-Methods", "GET, PUT, POST, OPTIONS")
+			h.Set("Access-Control-Allow-Headers", "authorization, content-type, accept")
+			h.Set("Access-Control-Max-Age", "600")
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func rejectHTML(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.Header.Get("Accept"), "text/html") && r.URL.Path == "/" {

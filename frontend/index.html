@@ -10,7 +10,8 @@
     main { max-width: 960px; margin: 0 auto; padding: 28px 20px 48px; }
     h1 { font-size: 1.4rem; margin: 0 0 8px; }
     p.lede { color: #9aa6b2; margin-top: 0; }
-    label, button, input { font: inherit; }
+    label, button, input, select { font: inherit; }
+    select { margin: 6px 0 12px; padding: 6px 8px; border-radius: 8px; border: 1px solid #2a3340; background: #11161c; color: inherit; }
     input { width: 100%; box-sizing: border-box; margin: 6px 0 12px; padding: 8px 10px; border-radius: 8px; border: 1px solid #2a3340; background: #11161c; color: inherit; }
     button { border: 0; border-radius: 8px; padding: 8px 12px; background: #1d6fbf; color: white; cursor: pointer; }
     button.ghost { background: transparent; color: #9ec6ef; }
@@ -36,12 +37,21 @@
     <div id="workspace" hidden>
       <p class="lede">If nothing is running, the sandbox pauses after 15 minutes and keeps its memory. Opening it, a command, or Take over wakes it.</p>
       <div class="tabs">
+        <button type="button" data-tab="chat">Chat</button>
         <button type="button" data-tab="terminal">Terminal</button>
         <button type="button" data-tab="preview">Preview</button>
         <button type="button" data-tab="desktop">Desktop</button>
         <button type="button" data-tab="settings">Settings</button>
       </div>
-      <div id="terminal">
+      <div id="chat">
+        <label>Agent <select id="chat-agent"><option value="">Main</option></select></label>
+        <pre id="chat-log">Ask the agent to do something in this workspace.</pre>
+        <form id="chat-form">
+          <input id="chat-prompt" placeholder="Message the agent" autocomplete="off" />
+          <button id="chat-send" type="submit">Send</button>
+        </form>
+      </div>
+      <div id="terminal" hidden>
         <pre id="screen">Connecting…</pre>
         <form id="shell">
           <input id="command" placeholder="Type a command" />
@@ -58,7 +68,6 @@
       <div id="desktop" hidden>
         <button id="takeover" type="button">Take over</button>
         <button id="return-control" class="ghost" type="button">Return control</button>
-        <iframe id="desktop-frame" title="Desktop"></iframe>
         <div id="vnc" style="height:420px;background:#000"></div>
       </div>
       <div id="settings" hidden>
@@ -73,7 +82,10 @@
   <p id="error" class="error"></p>
 </main>
 <script>
-const CLOUD = "https://infra.xibeai.in";
+// A page served from this machine may point at a local cloud for testing.
+// Anywhere else it always signs in to the real cloud.
+const LOCAL_PAGE = ["localhost", "127.0.0.1"].includes(location.hostname);
+const CLOUD = (LOCAL_PAGE && new URLSearchParams(location.search).get("cloud")) || "https://infra.xibeai.in";
 const state = { token: "", sandbox: null, socket: null };
 const error = document.querySelector("#error");
 function fail(e) { error.textContent = e.message || String(e); }
@@ -109,12 +121,11 @@ async function openWorkspace(id) {
   error.textContent = "";
   try {
     await cloud(`/api/instances/${encodeURIComponent(id)}/wake`, { method: "POST", body: "{}" });
-    const attach = await cloud(`/api/instances/${encodeURIComponent(id)}/attach`, { method: "POST", body: "{}" });
-    state.sandbox = { id, host: attach.url, session: attach.token };
+    const attach = await cloud(`/api/instances/${encodeURIComponent(id)}/attach`, { method: "POST", body: JSON.stringify({ device: "pc" }) });
+    if (!attach.url || !attach.token) throw new Error("Sandbox did not return a session");
+    state.sandbox = { id, host: attach.url.replace(/\/$/, ""), session: attach.token };
     document.querySelector("#workspace").hidden = false;
     connectTerminal();
-    const desktop = await cloud(`/api/instances/${encodeURIComponent(id)}/preview?port=6080`);
-    document.querySelector("#desktop-frame").src = desktop.host || "";
     await loadSettings();
   } catch (e) { fail(e); }
 }
@@ -145,7 +156,7 @@ function connectTerminal() {
 }
 document.querySelectorAll("[data-tab]").forEach((button) => {
   button.onclick = () => {
-    for (const name of ["terminal", "preview", "desktop", "settings"]) {
+    for (const name of ["chat", "terminal", "preview", "desktop", "settings"]) {
       document.querySelector("#" + name).hidden = name !== button.dataset.tab;
     }
   };
@@ -161,7 +172,49 @@ document.querySelector("#preview-form").onsubmit = async (event) => {
 async function loadSettings() {
   const body = await cloud(`/api/instances/${encodeURIComponent(state.sandbox.id)}/sandbox-state`);
   document.querySelector("#settings-body").textContent = JSON.stringify(body, null, 2);
+  const select = document.querySelector("#chat-agent");
+  const chosen = select.value;
+  select.replaceChildren();
+  for (const agent of body.agents || []) {
+    const option = document.createElement("option");
+    option.value = agent.id === "main" ? "" : agent.id;
+    option.textContent = agent.name || agent.id;
+    select.append(option);
+  }
+  select.value = chosen;
 }
+// Turns go straight to the sandbox host with this device's session.
+async function host(path, options = {}) {
+  const response = await fetch(state.sandbox.host + path, {
+    ...options,
+    headers: { accept: "application/json", "content-type": "application/json", authorization: "Bearer " + state.sandbox.session },
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || "Sandbox request failed (" + response.status + ")");
+  return body;
+}
+document.querySelector("#chat-form").onsubmit = async (event) => {
+  event.preventDefault();
+  const input = document.querySelector("#chat-prompt");
+  const send = document.querySelector("#chat-send");
+  const log = document.querySelector("#chat-log");
+  const prompt = input.value.trim();
+  if (!prompt || !state.sandbox) return;
+  if (log.dataset.started !== "1") { log.textContent = ""; log.dataset.started = "1"; }
+  log.textContent += "You: " + prompt + "\n";
+  input.value = "";
+  send.disabled = true;
+  try {
+    const agentId = document.querySelector("#chat-agent").value;
+    const reply = await host("/v1/turns", { method: "POST", body: JSON.stringify({ engine: "supercharge", prompt, ...(agentId ? { agentId } : {}) }) });
+    log.textContent += "Agent: " + (reply.output || "(no reply)") + "\n\n";
+  } catch (e) {
+    log.textContent += "Agent error: " + (e.message || String(e)) + "\n\n";
+  } finally {
+    send.disabled = false;
+    log.scrollTop = log.scrollHeight;
+  }
+};
 let handoffId = "";
 let rfb;
 document.querySelector("#takeover").onclick = async () => {
