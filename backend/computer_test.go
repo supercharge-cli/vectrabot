@@ -286,20 +286,22 @@ func TestStatusReportsOpenTerminalsAsWork(t *testing.T) {
 func TestBrowsersMayCallWithASessionOnly(t *testing.T) {
 	srv := httptest.NewServer(newServer(testTokens(), t.TempDir()))
 	defer srv.Close()
-	req, _ := http.NewRequest(http.MethodOptions, srv.URL+"/v1/turns", nil)
-	req.Header.Set("Origin", "http://127.0.0.1:4173")
-	req.Header.Set("Access-Control-Request-Method", "POST")
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
+	for _, path := range []string{"/v1/turns", "/api/bots"} {
+		req, _ := http.NewRequest(http.MethodOptions, srv.URL+path, nil)
+		req.Header.Set("Origin", "http://127.0.0.1:4173")
+		req.Header.Set("Access-Control-Request-Method", "POST")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if res.StatusCode != 204 || res.Header.Get("Access-Control-Allow-Origin") != "*" || res.Header.Get("Access-Control-Allow-Credentials") != "" {
+			t.Fatalf("preflight %s %d %v", path, res.StatusCode, res.Header)
+		}
 	}
-	res.Body.Close()
-	if res.StatusCode != 204 || res.Header.Get("Access-Control-Allow-Origin") != "*" || res.Header.Get("Access-Control-Allow-Credentials") != "" {
-		t.Fatalf("preflight %d %v", res.StatusCode, res.Header)
-	}
-	req, _ = http.NewRequest(http.MethodGet, srv.URL+"/v1/settings", nil)
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/v1/settings", nil)
 	req.Header.Set("Origin", "http://127.0.0.1:4173")
-	res, _ = http.DefaultClient.Do(req)
+	res, _ := http.DefaultClient.Do(req)
 	res.Body.Close()
 	if res.StatusCode != 401 {
 		t.Fatalf("cross-origin call without a session %d", res.StatusCode)

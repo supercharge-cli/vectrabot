@@ -180,9 +180,19 @@ func (p *providerControl) serveAction(w http.ResponseWriter, r *http.Request) {
 		writeRPCError(w, err)
 		return
 	}
-	if action == "save" || action == "image/save" || strings.HasSuffix(action, "/poll") {
+	if action == "save" {
+		// The CLI's setup now owns the provider choice; the cloud settings no
+		// longer override it on the next process start.
+		if err := markCLIProvider(envMap(savedOverlay())); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not record the provider choice"})
+			return
+		}
+	}
+	if action == "save" || action == "image/save" {
 		// A new key or login changes the config: new turns start fresh processes.
 		p.hub.restartIdle()
+		// The control process also answers /api/models from its startup state.
+		p.restart()
 	}
 	writeScrubbed(w, raw)
 }

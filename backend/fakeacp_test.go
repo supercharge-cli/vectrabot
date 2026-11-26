@@ -96,6 +96,8 @@ func fakeAgent() {
 			waitMu.Unlock()
 		case "_supercharge/setup/status":
 			reply(map[string]any{"configured": true, "hasApiKey": true, "apiKey": "sk-should-never-leak-1234", "providers": []map[string]any{{"id": "openai", "auth": "api_key"}}})
+		case "_supercharge/setup/save":
+			reply(map[string]any{"saved": true})
 		case "session/prompt":
 			blocks, _ := p["prompt"].([]any)
 			last := blocks[len(blocks)-1].(map[string]any)["text"].(string)
@@ -115,6 +117,17 @@ func fakeAgent() {
 				case "perm":
 					a := ask("session/request_permission", map[string]any{"sessionId": sid, "toolCall": map[string]any{"toolCallId": "t3", "title": "Run ls"}, "options": []map[string]string{{"optionId": "allow-once", "kind": "allow_once", "name": "Allow"}, {"optionId": "reject-once", "kind": "reject_once", "name": "Reject"}}})
 					chunk(sid, "perm: "+string(a))
+				case "pid":
+					chunk(sid, fmt.Sprintf("pid=%d", os.Getpid()))
+				case "fail401internal":
+					send(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": -32603, "message": "Internal error", "data": "Unauthorized (401) from http://127.0.0.1:1/v1/chat/completions: invalid_api_key"}})
+					return
+				case "fail403":
+					send(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": -32603, "message": "Internal error", "data": "Forbidden (403) from http://127.0.0.1:1/v1/chat/completions"}})
+					return
+				case "fail401":
+					send(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": -32000, "message": "Authentication required"}})
+					return
 				case "slow":
 					ch := make(chan struct{})
 					waitMu.Lock()

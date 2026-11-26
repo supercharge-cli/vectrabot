@@ -38,6 +38,15 @@ func providerEnvFiles() []string {
 	return []string{"/home/user/.superagent/daemon.env", "/home/user/.superagent/gateway.env"}
 }
 
+// savedOverlay reads every provider overlay the cloud wrote.
+func savedOverlay() []string {
+	var overlay []string
+	for _, file := range providerEnvFiles() {
+		overlay = append(overlay, readEnvFile(file)...)
+	}
+	return overlay
+}
+
 // readEnvFile parses simple KEY=VALUE lines (optionally quoted, optionally
 // prefixed with export). It never evaluates shell syntax.
 func readEnvFile(path string) []string {

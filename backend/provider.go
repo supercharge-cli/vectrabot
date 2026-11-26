@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/url"
 	"os"
@@ -128,7 +130,9 @@ func tomlString(value string) string {
 }
 
 // stripManaged removes the managed block, and any managed model table left
-// behind if another tool rewrote the file without the markers.
+// behind if another tool rewrote the file without the markers. The CLI's own
+// /setup rewrites the file with toml_edit, which can move its own tables
+// inside the markers; those are kept and only the managed tables are dropped.
 func stripManaged(text string) string {
 	var kept []string
 	inBlock, inTable := false, false
@@ -136,14 +140,12 @@ func stripManaged(text string) string {
 		trimmed := strings.TrimSpace(line)
 		switch {
 		case trimmed == providerBlockStart:
-			inBlock = true
+			inBlock, inTable = true, true
 			continue
 		case trimmed == providerBlockEnd:
 			inBlock, inTable = false, false
 			continue
-		case inBlock:
-			continue
-		case managedModelTable.MatchString(trimmed):
+		case managedModelTable.MatchString(trimmed) || (inBlock && modelsTable.MatchString(line)):
 			inTable = true
 			continue
 		case inTable && tableHeader.MatchString(line):
@@ -182,12 +184,46 @@ func managedBlock(p providerSetup, withDefault bool) string {
 	return strings.Join(lines, "\n")
 }
 
+// cliOwnerPath marks that the provider was last chosen through the CLI's own
+// setup (the apps' Providers screen) rather than the cloud settings.
+func cliOwnerPath() string { return superchargeConfigPath() + ".vectra-cli-owned" }
+
+// providerFingerprint identifies the cloud's saved provider without storing it.
+func providerFingerprint(vars map[string]string) string {
+	setup, ok := providerFromEnv(vars)
+	if !ok {
+		return "none"
+	}
+	sum := sha256.Sum256([]byte(strings.Join([]string{setup.ID, setup.Model, setup.BaseURL, setup.Format, setup.Key}, "\x00")))
+	return hex.EncodeToString(sum[:])
+}
+
+// markCLIProvider records that the CLI's setup now owns the provider choice.
+// It holds until the cloud settings change, which hands the choice back.
+func markCLIProvider(vars map[string]string) error {
+	providerConfigMu.Lock()
+	defer providerConfigMu.Unlock()
+	path := cliOwnerPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(providerFingerprint(vars)), 0o600)
+}
+
 // applyProvider writes the saved provider into the CLI config (owner-only) and
 // returns the catalog key to select, or "" to leave the CLI's own choice.
-// With no saved provider it removes an earlier managed block.
+// With no saved provider it removes an earlier managed block. After a save
+// through the CLI's setup it leaves the file alone until the cloud settings
+// change.
 func applyProvider(vars map[string]string) (string, error) {
 	providerConfigMu.Lock()
 	defer providerConfigMu.Unlock()
+	if owned, err := os.ReadFile(cliOwnerPath()); err == nil {
+		if string(owned) == providerFingerprint(vars) {
+			return "", nil
+		}
+		_ = os.Remove(cliOwnerPath())
+	}
 	path := superchargeConfigPath()
 	current, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {

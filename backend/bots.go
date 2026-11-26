@@ -100,7 +100,10 @@ type requestCard struct {
 	Options   []permissionOption `json:"options,omitempty"`
 	Questions []questionItem     `json:"questions,omitempty"`
 	Plan      string             `json:"plan,omitempty"`
-	Answer    any                `json:"answer,omitempty"`
+	// Mode is the session mode a question was asked in; plan-mode questions
+	// also offer "chat about this" and "skip interview".
+	Mode   string `json:"mode,omitempty"`
+	Answer any    `json:"answer,omitempty"`
 }
 
 type planEntry struct {
@@ -120,7 +123,11 @@ type message struct {
 	Request  *requestCard `json:"request,omitempty"`
 	Entries  []planEntry  `json:"entries,omitempty"`
 	Error    bool         `json:"error,omitempty"`
-	Changes  []fileChange `json:"changes,omitempty"`
+	// ErrorCode is the ACP error code of a failed turn; Action tells the app
+	// what fixes it: "retry", "providers" (sign in or new key) or "model".
+	ErrorCode int          `json:"errorCode,omitempty"`
+	Action    string       `json:"action,omitempty"`
+	Changes   []fileChange `json:"changes,omitempty"`
 }
 
 func nowMillis() int64 { return time.Now().UnixMilli() }

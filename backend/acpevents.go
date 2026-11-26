@@ -236,7 +236,9 @@ func (h *botHub) applyUpdateLocked(tid string, live *threadLive, u sessionUpdate
 		}
 		return true
 	case "session_info_update":
-		if t := h.store.threads[tid]; t != nil && u.Title != nil && strings.TrimSpace(*u.Title) != "" && !t.Renamed {
+		// The agent titles a session from its first prompt; skip titles taken
+		// from the bot profile block and keep the user's own words instead.
+		if t := h.store.threads[tid]; t != nil && u.Title != nil && strings.TrimSpace(*u.Title) != "" && !t.Renamed && !strings.Contains(*u.Title, "bot_profile") {
 			t.Title = strings.TrimSpace(*u.Title)
 			_ = h.store.saveLocked()
 			h.events.publish("thread", map[string]any{"botId": t.BotID, "threadId": t.ID, "thread": *t})
@@ -295,9 +297,10 @@ func (e *botEvents) request(ctx context.Context, method string, params json.RawM
 		var p struct {
 			SessionID string         `json:"sessionId"`
 			Questions []questionItem `json:"questions"`
+			Mode      string         `json:"mode"`
 		}
 		_ = json.Unmarshal(params, &p)
-		answer, ok := e.ask(ctx, p.SessionID, &requestCard{Type: "question", Title: "Questions", Questions: p.Questions})
+		answer, ok := e.ask(ctx, p.SessionID, &requestCard{Type: "question", Title: "Questions", Questions: p.Questions, Mode: p.Mode})
 		if !ok {
 			return map[string]any{"outcome": "cancelled"}, nil
 		}
@@ -309,7 +312,12 @@ func (e *botEvents) request(ctx context.Context, method string, params json.RawM
 		_ = json.Unmarshal(answer, &a)
 		switch a.Outcome {
 		case "chat_about_this", "skip_interview":
-			return map[string]any{"outcome": a.Outcome, "partial_answers": nonNilAnswers(a.Answers)}, nil
+			// Partial answers are one string per question.
+			partial := map[string]string{}
+			for q, v := range a.Answers {
+				partial[q] = strings.Join(v, ", ")
+			}
+			return map[string]any{"outcome": a.Outcome, "partial_answers": partial}, nil
 		case "cancelled":
 			return map[string]any{"outcome": "cancelled"}, nil
 		}

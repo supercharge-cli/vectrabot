@@ -36,6 +36,9 @@ type botRuntime struct {
 	init     json.RawMessage
 	sessions map[string]string // session id -> thread id
 	lastUsed time.Time
+	// stale is set when the provider config changed during a turn; the process
+	// is replaced once it is idle so new turns read the new config.
+	stale bool
 }
 
 type pendingRequest struct {
@@ -89,7 +92,13 @@ func (h *botHub) closeIdle(idle time.Duration) {
 	h.store.mu.Lock()
 	var stop []*acpConn
 	for id, rt := range h.runtimes {
-		if time.Since(rt.lastUsed) < idle || h.runtimeBusyLocked(rt) {
+		if time.Since(rt.lastUsed) < idle {
+			continue
+		}
+		if h.runtimeBusyLocked(rt) {
+			if idle == 0 {
+				rt.stale = true
+			}
 			continue
 		}
 		stop = append(stop, rt.conn)
@@ -102,6 +111,11 @@ func (h *botHub) closeIdle(idle time.Duration) {
 	for _, c := range stop {
 		c.close()
 	}
+}
+
+// replaceableLocked reports a stale process that has no turn in flight.
+func (h *botHub) replaceableLocked(rt *botRuntime) bool {
+	return rt.stale && !h.runtimeBusyLocked(rt)
 }
 
 func (h *botHub) runtimeBusyLocked(rt *botRuntime) bool {
@@ -133,18 +147,23 @@ func (h *botHub) agentCommand() (*exec.Cmd, error) {
 func (h *botHub) runtimeFor(ctx context.Context, botID string) (*botRuntime, error) {
 	h.store.mu.Lock()
 	rt := h.runtimes[botID]
-	if rt != nil && rt.conn.alive() {
+	if rt != nil && rt.conn.alive() && !h.replaceableLocked(rt) {
 		rt.lastUsed = time.Now()
 		h.store.mu.Unlock()
 		return rt, nil
 	}
+	var old *acpConn
 	if rt != nil {
+		old = rt.conn
 		for _, tid := range rt.sessions {
 			delete(h.live, tid)
 		}
 		delete(h.runtimes, botID)
 	}
 	h.store.mu.Unlock()
+	if old != nil {
+		old.close()
+	}
 	cmd, err := h.agentCommand()
 	if err != nil {
 		return nil, err
@@ -193,7 +212,7 @@ func (h *botHub) openSession(ctx context.Context, threadID string) (*botRuntime,
 		return nil, nil, errNotFound
 	}
 	botID, saved, settings, wantMode := bot.ID, thread.SessionID, bot.Settings, thread.Mode
-	if rt := h.runtimes[botID]; rt != nil && rt.conn.alive() {
+	if rt := h.runtimes[botID]; rt != nil && rt.conn.alive() && !h.replaceableLocked(rt) {
 		if l := h.live[threadID]; l != nil {
 			rt.lastUsed = time.Now()
 			h.store.mu.Unlock()
@@ -250,7 +269,13 @@ func (h *botHub) openSession(ctx context.Context, threadID string) (*botRuntime,
 	h.store.mu.Unlock()
 	if !loaded {
 		if settings.Model != "" {
-			h.setConfigOn(ctx, rt, live, "model", settings.Model)
+			if err := h.setConfigOn(ctx, rt, live, "model", settings.Model); err != nil {
+				// Keep going on the workspace default, and say so.
+				h.store.mu.Lock()
+				h.appendLocked(threadID, &message{Role: "bot", Kind: "notice", Error: true, Action: "model",
+					Text: fmt.Sprintf("The bot's model %q is not available, so this thread uses the workspace default. Pick another model in the bot's settings.", settings.Model)})
+				h.store.mu.Unlock()
+			}
 		}
 		if settings.PermissionMode != "" && settings.PermissionMode != "ask" {
 			h.setConfigOn(ctx, rt, live, "permission_mode", settings.PermissionMode)
@@ -507,12 +532,29 @@ func (h *botHub) finishTurn(threadID string, live *threadLive, stopReason string
 		}
 	}
 	delete(h.turning, threadID)
+	// A provider change arrived mid-turn: replace the process now it is idle.
+	if t := h.store.threads[threadID]; t != nil {
+		if rt := h.runtimes[t.BotID]; rt != nil && h.replaceableLocked(rt) {
+			for _, tid := range rt.sessions {
+				delete(h.live, tid)
+			}
+			delete(h.runtimes, t.BotID)
+			go rt.conn.close()
+		}
+	}
 	if q := h.queues[threadID]; err == nil && len(q) > 0 {
 		next = q[0]
 		h.queues[threadID] = q[1:]
 	}
+	var rpc *rpcError
+	if errors.As(err, &rpc) && rpc.Code == -32602 && strings.Contains(rpc.Error(), "unknown session") {
+		if t := h.store.threads[threadID]; t != nil {
+			t.SessionID, t.Primed = "", false
+		}
+		delete(h.live, threadID)
+	}
 	if err != nil {
-		h.appendLocked(threadID, &message{Role: "bot", Kind: "notice", Error: true, Text: err.Error()})
+		h.appendLocked(threadID, turnErrorMessage(err))
 	} else if stopReason == "cancelled" {
 		h.appendLocked(threadID, &message{Role: "bot", Kind: "notice", Text: "Stopped."})
 	} else if stopReason == "max_tokens" || stopReason == "max_turn_requests" || stopReason == "refusal" {
@@ -657,4 +699,59 @@ func botTurnTimeout() time.Duration {
 		return d
 	}
 	return time.Hour
+}
+
+// turnErrorMessage turns an ACP error into a notice the apps can act on.
+// Codes follow the CLI: -32000 is a 401 (sign in again), -32003 a 429,
+// -32050 a missing model, -32603 overload/5xx/403 (403 is not re-auth).
+func turnErrorMessage(err error) *message {
+	m := &message{Role: "bot", Kind: "notice", Error: true, Text: err.Error(), Action: "retry"}
+	var rpc *rpcError
+	if !errors.As(err, &rpc) {
+		if strings.Contains(err.Error(), "process stopped") {
+			m.Text = "The agent stopped unexpectedly. The next message resumes this thread."
+		}
+		return m
+	}
+	m.ErrorCode = rpc.Code
+	detail := rpc.Error()
+	switch rpc.Code {
+	case -32000:
+		m.Text, m.Action = "The provider rejected the credentials (401). Sign in again or paste a new API key.", "providers"
+	case -32003:
+		m.Text = "Rate limited by the provider. Wait a moment and retry."
+		if strings.Contains(detail, "free-usage-exhausted") {
+			m.Text, m.Action = "The free usage for this provider is used up. Switch provider or wait for the reset.", "providers"
+		}
+	case -32050:
+		m.Text, m.Action = rpc.Message, "model"
+		if m.Text == "" {
+			m.Text = "No model is configured. Connect a provider."
+		}
+	case -32002:
+		m.Text, m.Action = "The provider could not find that model or URL (404). Check the model.", "model"
+	case -32602:
+		m.Text = "The request was rejected: " + clip(detail, 300)
+		if strings.Contains(detail, "unknown session") {
+			m.Text = "This thread's session was not found. The next message starts a fresh session."
+		}
+	case -32603:
+		m.Text = clip(detail, 300)
+		if unauthorizedDetail(detail) {
+			// The released CLI reports some provider 401s as internal errors.
+			m.Text, m.Action = "The provider rejected the credentials (401). Sign in again or paste a new API key.", "providers"
+		} else if strings.Contains(strings.ToLower(detail), "overloaded") {
+			m.Text = "The model is temporarily overloaded. Try again in a moment."
+		}
+	default:
+		m.Text = clip(detail, 300)
+	}
+	return m
+}
+
+// unauthorizedDetail spots a provider 401 inside a generic error message.
+// A 403 is not re-auth, so it is never matched.
+func unauthorizedDetail(detail string) bool {
+	d := strings.ToLower(detail)
+	return strings.Contains(d, "unauthorized (401)") || strings.Contains(d, "http 401") || strings.Contains(d, "status 401")
 }

@@ -14,9 +14,9 @@ import (
 )
 
 type botTestEnv struct {
-	t    *testing.T
-	srv  *httptest.Server
-	root string
+	t      *testing.T
+	srv    *httptest.Server
+	root   string
 	frames chan map[string]any
 }
 
@@ -91,7 +91,6 @@ func messageFrame(f map[string]any) map[string]any {
 	m, _ := f["message"].(map[string]any)
 	return m
 }
-
 
 func textContains(contains string) func(map[string]any) bool {
 	return func(f map[string]any) bool {
@@ -333,5 +332,65 @@ func TestNextRun(t *testing.T) {
 	}
 	if nextRun(routineSchedule{Type: "once", At: now.Add(-time.Minute).UnixMilli()}, now) != 0 {
 		t.Fatal("past once")
+	}
+}
+
+func TestBotTurnErrorsMapToActions(t *testing.T) {
+	e := newBotTestEnv(t)
+	_, body := e.do("GET", "/api/bots", "")
+	bot := body["bots"].([]any)[0].(map[string]any)
+	e.do("POST", "/api/bots/"+bot["id"].(string)+"/messages", `{"text":"fail401"}`)
+	f := e.waitFor("error notice", func(f map[string]any) bool {
+		m := messageFrame(f)
+		return m != nil && m["kind"] == "notice" && m["error"] == true
+	})
+	m := messageFrame(f)
+	if m["errorCode"].(float64) != -32000 || m["action"] != "providers" {
+		t.Fatalf("notice %v", m)
+	}
+	// The released CLI wraps some 401s in -32603; a 403 must not ask for a new key.
+	for prompt, want := range map[string]string{"fail401internal": "providers", "fail403": "retry"} {
+		e.waitFor("turn end", turnDone)
+		e.do("POST", "/api/bots/"+bot["id"].(string)+"/messages", `{"text":"`+prompt+`"}`)
+		f := e.waitFor(prompt+" notice", func(f map[string]any) bool {
+			m := messageFrame(f)
+			return m != nil && m["kind"] == "notice" && m["error"] == true && m["errorCode"] == float64(-32603)
+		})
+		if got := messageFrame(f)["action"]; got != want {
+			t.Fatalf("%s action %v want %s: %v", prompt, got, want, messageFrame(f))
+		}
+	}
+}
+
+// A provider change during a turn replaces the bot's process once the turn ends.
+func TestProviderSaveReplacesBusyProcessAfterTurn(t *testing.T) {
+	e := newBotTestEnv(t)
+	_, body := e.do("GET", "/api/bots", "")
+	bot := body["bots"].([]any)[0].(map[string]any)
+	id, tid := bot["id"].(string), bot["threadId"].(string)
+	pid := func() string {
+		e.do("POST", "/api/bots/"+id+"/messages", `{"text":"pid"}`)
+		f := e.waitFor("pid", textContains("pid="))
+		e.waitFor("turn end", turnDone)
+		m := messageFrame(f)
+		return m["text"].(string)
+	}
+	before := pid()
+	e.do("POST", "/api/bots/"+id+"/messages", `{"text":"ask"}`)
+	f := e.waitFor("question card", func(f map[string]any) bool {
+		m := messageFrame(f)
+		return m != nil && m["kind"] == "request" && m["request"].(map[string]any)["state"] == "pending"
+	})
+	if code, out := e.do("POST", "/api/providers/save", `{}`); code != 200 {
+		t.Fatalf("save %d %v", code, out)
+	}
+	rid := messageFrame(f)["request"].(map[string]any)["id"].(string)
+	if code, out := e.do("POST", "/api/threads/"+tid+"/respond", `{"requestId":"`+rid+`","answer":{"answers":{"Color?":["Red"]}}}`); code != 200 {
+		t.Fatalf("respond %d %v", code, out)
+	}
+	e.waitFor("answer", textContains("Red"))
+	e.waitFor("turn end", turnDone)
+	if after := pid(); after == before {
+		t.Fatalf("process kept after a provider change: %s", after)
 	}
 }

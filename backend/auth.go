@@ -43,7 +43,10 @@ func loadTokenStore() (*tokenStore, error) {
 		file = "/home/user/.vectrabot/sessions"
 	}
 	store := newTokenStore([]string{os.Getenv("VECTRABOT_SESSION"), os.Getenv("VECTRABOT_CLOUD_TOKEN")}, file)
-	if len(store.fixed) == 0 && len(store.current()) == 0 {
+	// A template boots the host before any device attached; it then waits for
+	// the cloud to write the first session.
+	waiting := os.Getenv("VECTRABOT_WAIT_FOR_SESSION") == "1"
+	if len(store.fixed) == 0 && len(store.current()) == 0 && !waiting {
 		return nil, errors.New("VECTRABOT_SESSION or a session file is required")
 	}
 	return store, nil
@@ -111,12 +114,12 @@ func authorized(r *http.Request, tokens *tokenStore) bool {
 	return false
 }
 
-// allowBrowsers lets the computer app call /v1 from its own origin. Every call
+// allowBrowsers lets the apps call /v1 and /api from their own origin. Every call
 // carries a bearer session and no cookies are used, so any origin may ask but
 // none gains access without a session.
 func allowBrowsers(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/v1/") && r.Header.Get("Origin") != "" {
+		if (strings.HasPrefix(r.URL.Path, "/v1/") || strings.HasPrefix(r.URL.Path, "/api/")) && r.Header.Get("Origin") != "" {
 			h := w.Header()
 			h.Set("Access-Control-Allow-Origin", "*")
 			h.Set("Access-Control-Allow-Methods", "GET, PUT, POST, PATCH, DELETE, OPTIONS")

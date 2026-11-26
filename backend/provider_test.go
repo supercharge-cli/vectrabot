@@ -186,3 +186,45 @@ func TestParseTurnOutputReadsPrettyJSON(t *testing.T) {
 		t.Fatalf("error line ok=%v typed=%+v", ok, typed)
 	}
 }
+
+// A provider saved through the CLI's setup wins until the cloud settings change.
+func TestCLISetupOwnsProviderUntilCloudSettingsChange(t *testing.T) {
+	path := useConfig(t, "")
+	if _, err := applyProvider(savedMistral()); err != nil {
+		t.Fatal(err)
+	}
+	// What the CLI's toml_edit save leaves: its own default and model inside the
+	// markers, and a table of its own moved before the end marker.
+	cliSaved := strings.Replace(readText(t, path), `default = "vectra-mistral"`, `default = "stub-model"`, 1)
+	cliSaved = strings.Replace(cliSaved, providerBlockEnd, "[model.\"stub-model\"]\nmodel = \"stub-model\"\n\n[marketplace]\nx = true\n"+providerBlockEnd, 1)
+	if err := os.WriteFile(path, []byte(cliSaved), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := markCLIProvider(savedMistral()); err != nil {
+		t.Fatal(err)
+	}
+	if key, err := applyProvider(savedMistral()); err != nil || key != "" {
+		t.Fatalf("owned key=%q err=%v", key, err)
+	}
+	if readText(t, path) != cliSaved {
+		t.Fatal("CLI-owned config was rewritten")
+	}
+	changed := savedMistral()
+	changed["SUPERAGENT_MODEL"] = "mistral-large-latest"
+	key, err := applyProvider(changed)
+	if err != nil || key != "vectra-mistral" {
+		t.Fatalf("reclaim key=%q err=%v", key, err)
+	}
+	text := readText(t, path)
+	for _, want := range []string{`default = "vectra-mistral"`, `model = "mistral-large-latest"`, `[model."stub-model"]`, "[marketplace]"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("reclaimed config missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, `default = "stub-model"`) {
+		t.Fatalf("old CLI default kept:\n%s", text)
+	}
+	if _, err := os.Stat(path + ".vectra-cli-owned"); !os.IsNotExist(err) {
+		t.Fatal("owner mark kept after the cloud settings changed")
+	}
+}
