@@ -203,14 +203,31 @@ private suspend fun handoff(api: CloudApi, sandbox: OpenSandbox, action: String)
         .put("handoffId", desktopHandoffId)
         .put("botId", "main")
         .toString()
-    withContext(Dispatchers.IO) {
+    val reply = withContext(Dispatchers.IO) {
         api.post("/api/instances/${sandbox.instanceId}/computer/handoff", sandbox.cloudToken, body)
+    }
+    if (!reply.optBoolean("ok") || reply.optBoolean("handoff") != (action == "start")) {
+        throw IllegalStateException(reply.optString("error").ifBlank {
+            if (action == "start") "Takeover could not be confirmed" else "Return could not be confirmed"
+        })
     }
 }
 
 @Composable
 private fun SandboxPane(api: CloudApi, sandbox: OpenSandbox, tab: String, onTab: (String) -> Unit) {
     val scope = rememberCoroutineScope()
+    var desktopNote by remember { mutableStateOf("") }
+    // A failed handoff must surface as text: an exception escaping launch {} crashes the app.
+    fun runHandoff(action: String) {
+        scope.launch {
+            desktopNote = try {
+                handoff(api, sandbox, action)
+                if (action == "start") "You have the desktop. The agent waits until you return control." else "Control returned."
+            } catch (failure: Exception) {
+                failure.message ?: "Desktop handoff failed"
+            }
+        }
+    }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("terminal", "preview", "desktop", "settings").forEach { name ->
@@ -223,9 +240,10 @@ private fun SandboxPane(api: CloudApi, sandbox: OpenSandbox, tab: String, onTab:
             "desktop" -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("If nothing is running, the sandbox pauses after 15 minutes. Opening it wakes it. Take over pauses the agent until you return control.")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = { scope.launch { handoff(api, sandbox, "start") } }) { Text("Take over") }
-                    TextButton(onClick = { scope.launch { handoff(api, sandbox, "stop") } }) { Text("Return control") }
+                    TextButton(onClick = { runHandoff("start") }) { Text("Take over") }
+                    TextButton(onClick = { runHandoff("stop") }) { Text("Return control") }
                 }
+                if (desktopNote.isNotBlank()) Text(desktopNote, style = MaterialTheme.typography.bodySmall)
                 CloudPage(api, sandbox, 6080, "Desktop")
             }
             else -> CloudSettings(api, sandbox)
