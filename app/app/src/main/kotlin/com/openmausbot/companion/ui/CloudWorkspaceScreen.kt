@@ -98,7 +98,7 @@ fun CloudWorkspaceScreen(onBack: () -> Unit) {
     var token by remember { mutableStateOf("") }
     var workspaces by remember { mutableStateOf(listOf<Pair<String, String>>()) }
     var open by remember { mutableStateOf<OpenSandbox?>(null) }
-    var tab by remember { mutableStateOf("terminal") }
+    var tab by remember { mutableStateOf("chat") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
 
@@ -163,12 +163,12 @@ fun CloudWorkspaceScreen(onBack: () -> Unit) {
                         scope.launch {
                             try {
                                 withContext(Dispatchers.IO) { api.post("/api/instances/$id/wake", token, "{}") }
-                                val attach = withContext(Dispatchers.IO) { api.post("/api/instances/$id/attach", token, "{}") }
+                                val attach = withContext(Dispatchers.IO) { api.post("/api/instances/$id/attach", token, JSONObject().put("device", "phone").toString()) }
                                 val host = attach.optString("url")
                                 val session = attach.optString("token")
                                 if (host.isBlank() || session.isBlank()) throw IllegalStateException("Sandbox did not return a session")
                                 open = OpenSandbox(id, host, session, token)
-                                tab = "terminal"
+                                tab = "chat"
                             } catch (failure: Exception) {
                                 error = failure.message ?: "Workspace did not open"
                             } finally {
@@ -217,12 +217,22 @@ private suspend fun handoff(api: CloudApi, sandbox: OpenSandbox, action: String)
 private fun SandboxPane(api: CloudApi, sandbox: OpenSandbox, tab: String, onTab: (String) -> Unit) {
     val scope = rememberCoroutineScope()
     var desktopNote by remember { mutableStateOf("") }
+    var desktopSocket by remember(sandbox.instanceId) { mutableStateOf("") }
+    val sandboxClient = remember { CloudSandboxClient() }
     // A failed handoff must surface as text: an exception escaping launch {} crashes the app.
     fun runHandoff(action: String) {
         scope.launch {
             desktopNote = try {
                 handoff(api, sandbox, action)
-                if (action == "start") "You have the desktop. The agent waits until you return control." else "Control returned."
+                if (action == "start") {
+                    desktopSocket = withContext(Dispatchers.IO) {
+                        sandboxClient.vncTicket(CLOUD_BASE, sandbox.cloudToken, sandbox.instanceId, desktopHandoffId)
+                    }
+                    "You have the desktop. The agent waits until you return control."
+                } else {
+                    desktopSocket = ""
+                    "Control returned."
+                }
             } catch (failure: Exception) {
                 failure.message ?: "Desktop handoff failed"
             }
@@ -230,11 +240,12 @@ private fun SandboxPane(api: CloudApi, sandbox: OpenSandbox, tab: String, onTab:
     }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("terminal", "preview", "desktop", "settings").forEach { name ->
+            listOf("chat", "terminal", "preview", "desktop", "settings").forEach { name ->
                 TextButton(onClick = { onTab(name) }) { Text(name.replaceFirstChar { it.uppercase() }) }
             }
         }
         when (tab) {
+            "chat" -> CloudChat(api, sandbox, sandboxClient)
             "terminal" -> CloudTerminal(sandbox)
             "preview" -> CloudPage(api, sandbox, 3000, "Preview")
             "desktop" -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -244,7 +255,8 @@ private fun SandboxPane(api: CloudApi, sandbox: OpenSandbox, tab: String, onTab:
                     TextButton(onClick = { runHandoff("stop") }) { Text("Return control") }
                 }
                 if (desktopNote.isNotBlank()) Text(desktopNote, style = MaterialTheme.typography.bodySmall)
-                CloudPage(api, sandbox, 6080, "Desktop")
+                // Only a takeover ticket opens the desktop; nothing is shown before it.
+                if (desktopSocket.isNotBlank()) DesktopViewer(desktopSocket)
             }
             else -> CloudSettings(api, sandbox)
         }
@@ -340,4 +352,67 @@ private fun CloudSettings(api: CloudApi, sandbox: OpenSandbox) {
         }
     }, enabled = name.isNotBlank()) { Text("Add agent") }
     Text(text, style = MaterialTheme.typography.bodySmall)
+}
+
+@Composable
+private fun DesktopViewer(socket: String) {
+    AndroidView(
+        factory = { context ->
+            WebView(context).apply {
+                webViewClient = WebViewClient()
+                settings.javaScriptEnabled = true
+                loadDataWithBaseURL("https://desktop.vectrabot.invalid/", desktopViewerHtml(socket), "text/html", "utf-8", null)
+            }
+        },
+        update = { view ->
+            if (view.tag != socket) {
+                view.tag = socket
+                view.loadDataWithBaseURL("https://desktop.vectrabot.invalid/", desktopViewerHtml(socket), "text/html", "utf-8", null)
+            }
+        },
+        modifier = Modifier.fillMaxWidth().height(360.dp),
+    )
+}
+
+@Composable
+private fun CloudChat(api: CloudApi, sandbox: OpenSandbox, client: CloudSandboxClient) {
+    val scope = rememberCoroutineScope()
+    var agents by remember(sandbox.instanceId) { mutableStateOf(listOf("main" to "Main")) }
+    var agentId by remember(sandbox.instanceId) { mutableStateOf("main") }
+    var log by remember(sandbox.instanceId) { mutableStateOf("Ask the agent to do something in this workspace.") }
+    var draft by remember { mutableStateOf("") }
+    var sending by remember { mutableStateOf(false) }
+    LaunchedEffect(sandbox.instanceId) {
+        try {
+            val state = withContext(Dispatchers.IO) { api.get("/api/instances/${sandbox.instanceId}/sandbox-state", sandbox.cloudToken) }
+            sandboxAgents(state).takeIf { it.isNotEmpty() }?.let { agents = it }
+        } catch (_: Exception) {
+            // The main agent still works without the list.
+        }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        agents.forEach { (id, name) ->
+            TextButton(onClick = { agentId = id }) { Text(if (id == agentId) "• $name" else name) }
+        }
+    }
+    Text(log, style = MaterialTheme.typography.bodySmall, modifier = Modifier.height(260.dp).verticalScroll(rememberScrollState()))
+    OutlinedTextField(draft, { draft = it }, label = { Text("Message the agent") }, modifier = Modifier.fillMaxWidth())
+    Button(onClick = {
+        val prompt = draft.trim()
+        draft = ""
+        sending = true
+        log = (if (log.startsWith("Ask the agent")) "" else log) + "You: $prompt\n"
+        scope.launch {
+            log += try {
+                val reply = withContext(Dispatchers.IO) {
+                    client.turn(sandbox.host, sandbox.session, prompt, agentId.takeIf { it != "main" })
+                }
+                "Agent: $reply\n\n"
+            } catch (failure: Exception) {
+                "Agent error: ${failure.message ?: "turn failed"}\n\n"
+            } finally {
+                sending = false
+            }
+        }
+    }, enabled = !sending && draft.isNotBlank(), modifier = Modifier.fillMaxWidth()) { Text(if (sending) "Working…" else "Send") }
 }
