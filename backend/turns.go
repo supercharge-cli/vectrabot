@@ -67,10 +67,13 @@ func readEnvFile(path string) []string {
 }
 
 // turnArgs is the Supercharge CLI's single-turn, non-interactive form.
-func turnArgs(root, prompt, rules string) []string {
+func turnArgs(root, prompt, rules, model string) []string {
 	args := []string{"-p", prompt, "--output-format", "json", "--always-approve", "--cwd", root}
 	if rules != "" {
 		args = append(args, "--rules", rules)
+	}
+	if model != "" {
+		args = append(args, "-m", model)
 	}
 	return args
 }
@@ -85,6 +88,13 @@ type cliReply struct {
 }
 
 func parseTurnOutput(out []byte) (reply map[string]any, typed cliReply, ok bool) {
+	// The CLI prints one pretty-printed JSON document; older builds printed
+	// one JSON object per line, so fall back to scanning lines.
+	whole := strings.TrimSpace(string(out))
+	if json.Unmarshal([]byte(whole), &reply) == nil && json.Unmarshal([]byte(whole), &typed) == nil {
+		return reply, typed, true
+	}
+	reply, typed = nil, cliReply{}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "{") {
@@ -125,15 +135,20 @@ func serveTurn(root string, state *diskState, w http.ResponseWriter, r *http.Req
 		}
 		rules = strings.TrimSpace(agent.Instructions)
 	}
+	var overlay []string
+	for _, file := range providerEnvFiles() {
+		overlay = append(overlay, readEnvFile(file)...)
+	}
+	model, err := applyProvider(envMap(overlay))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not apply the saved provider settings"})
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), turnTimeout())
 	defer cancel()
-	cmd := exec.CommandContext(ctx, superchargeBinary(), turnArgs(root, body.Prompt, rules)...)
+	cmd := exec.CommandContext(ctx, superchargeBinary(), turnArgs(root, body.Prompt, rules, model)...)
 	cmd.Dir = root
-	env := os.Environ()
-	for _, file := range providerEnvFiles() {
-		env = append(env, readEnvFile(file)...)
-	}
-	cmd.Env = append(env, "VECTRABOT_ENGINE=supercharge")
+	cmd.Env = append(childEnv(overlay), "VECTRABOT_ENGINE=supercharge")
 	cmd.Stdin = nil
 	cmd.WaitDelay = 2 * time.Second
 	out, err := cmd.Output()

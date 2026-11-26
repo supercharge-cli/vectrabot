@@ -28,6 +28,7 @@ func serveTerminal(root string, w http.ResponseWriter, r *http.Request) {
 		shell = "/bin/bash"
 	}
 	cmd := exec.Command(shell)
+	cmd.Env = childEnv(nil)
 	cmd.Dir = root
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
