@@ -150,12 +150,17 @@ async function cloud(path, options = {}) {
   if (!res.ok) throw new Error(body.error || `Cloud request failed (${res.status})`);
   return body;
 }
-async function host(path, options = {}, retried = false) {
+function providerSave(path) { return path === "/api/providers/save" || path === "/api/providers/image/save"; }
+async function host(path, options = {}, retried = false, attempt = 0) {
   if (!state.ws) throw new Error("No workspace open");
   const raw = options.raw;
   const headers = { accept: "application/json", authorization: "Bearer " + state.ws.session, ...(options.body && !raw ? { "content-type": "application/json" } : {}) };
   const res = await fetch(state.ws.host + path, { ...options, headers });
-  if (res.status === 401 && !retried) { await reattach(); return host(path, options, true); }
+  if (res.status === 401 && !retried) { await reattach(); return host(path, options, true, attempt); }
+  if (providerSave(path) && (res.status === 502 || res.status === 503) && attempt < 2) {
+    await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
+    return host(path, options, retried, attempt + 1);
+  }
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || `Sandbox request failed (${res.status})`);
   return body;
@@ -1384,7 +1389,9 @@ function terminalId() {
 }
 async function openTerminal() {
   if (!term.xterm) {
-    const [{ Terminal }, { FitAddon }] = await Promise.all([import("https://esm.sh/@xterm/xterm@5.5.0"), import("https://esm.sh/@xterm/addon-fit@0.10.0")]);
+    const Terminal = globalThis.Terminal;
+    const FitAddon = globalThis.FitAddon?.FitAddon || globalThis.FitAddon;
+    if (!Terminal || !FitAddon) throw new Error("Terminal failed to load");
     term.xterm = new Terminal({ cursorBlink: true, fontSize: 13, lineHeight: 1.25, fontFamily: "JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace", theme: { background: "#08080a", foreground: "#e6e6e9", cursor: "#24b469", selectionBackground: "#2b3a31", black: "#1a1a1d", brightBlack: "#5a5a62", green: "#33c57a", brightGreen: "#5ee39a", red: "#ef6461", yellow: "#e2a640", blue: "#6aa1ff", magenta: "#b392f0", cyan: "#4fc3d0" }, scrollback: 5000 });
     term.fit = new FitAddon(); term.xterm.loadAddon(term.fit); term.xterm.open($("#term"));
     term.xterm.onData((d) => { if (term.socket?.readyState === 1) term.socket.send(d); });
