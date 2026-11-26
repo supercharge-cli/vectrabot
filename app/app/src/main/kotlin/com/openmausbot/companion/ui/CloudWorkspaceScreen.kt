@@ -82,6 +82,17 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import java.util.concurrent.TimeUnit
 
 private const val CLOUD_BASE = "https://infra.xibeai.in"
@@ -157,7 +168,7 @@ fun CloudWorkspaceScreen() {
     LaunchedEffect(token) { if (token.isNotBlank() && workspaces.isEmpty()) run { loadList(token) } }
     BackHandler(enabled = open != null) { open = null }
 
-    Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+    VectraTheme { Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(modifier = Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
             val current = open
             when {
@@ -206,11 +217,14 @@ fun CloudWorkspaceScreen() {
                 else -> WorkspaceView(
                     api = api,
                     sandbox = current,
+                    email = email,
                     onBack = { open = null },
+                    onSignOut = { signOut() },
                 )
             }
         }
     }
+}
 }
 
 @Composable
@@ -222,104 +236,137 @@ private fun statusColor(status: String) = when (status) {
 
 /** State that outlives tab switches while one workspace is open. */
 private class WorkspaceState {
-    val chat = mutableStateListOf<ChatMessage>()
-    var agentId by mutableStateOf("main")
-    var agents by mutableStateOf(listOf(SandboxAgent("main", "Main", "")))
     val terminal = TerminalScreen()
     var terminalVersion by mutableIntStateOf(0)
     var shellId = newShellId()
 }
 
+private enum class Panel { Home, Chat, Info, Providers, Routines }
+
 @Composable
 private fun WorkspaceView(
     api: CloudApi,
     sandbox: OpenSandbox,
+    email: String,
     onBack: () -> Unit,
+    onSignOut: () -> Unit,
 ) {
     val client = remember { CloudSandboxClient() }
     val ws = remember(sandbox.instanceId) { WorkspaceState() }
-    var tab by rememberSaveable(sandbox.instanceId) { mutableIntStateOf(0) }
-    var note by remember { mutableStateOf("") }
-    val tabs = listOf("Chat", "Desktop", "Preview", "Terminal", "Agents")
-    suspend fun refreshAgents() {
-        val list = withContext(Dispatchers.IO) { client.agents(sandbox.host, sandbox.session) }
-        if (list.isNotEmpty()) ws.agents = list
-        if (ws.agents.none { it.id == ws.agentId }) ws.agentId = "main"
+    val bots = remember(sandbox.instanceId) {
+        BotsState(BotsClient().apply {
+            host = sandbox.host; session = sandbox.session
+            // A 401 from the host means the device session rotated; fetch a fresh one.
+            reattach = {
+                runCatching {
+                    val a = api.post("/api/instances/${sandbox.instanceId}/attach", sandbox.cloudToken, JSONObject().put("device", "phone").toString())
+                    host = a.optString("url").ifBlank { host }; session = a.optString("token").ifBlank { session }
+                }.isSuccess
+            }
+        })
     }
-    LaunchedEffect(sandbox.session) { runCatching { refreshAgents() } }
-    Column(modifier = Modifier.fillMaxSize()) {
-        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onBack) { Text("‹ Workspaces") }
-            Text(sandbox.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-            Text("● Running", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
-        }
-        ScrollableTabRow(selectedTabIndex = tab, edgePadding = 8.dp) {
-            tabs.forEachIndexed { i, title -> Tab(selected = tab == i, onClick = { tab = i }, text = { Text(title) }) }
-        }
-        if (note.isNotBlank()) Text(note, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(8.dp))
-        Box(modifier = Modifier.weight(1f).fillMaxWidth().padding(10.dp)) {
-            when (tab) {
-                0 -> ChatTab(ws, sandbox, client)
-                1 -> DesktopTab(api, sandbox, client)
-                2 -> PreviewTab(api, sandbox, client)
-                3 -> TerminalTab(ws, sandbox)
-                else -> AgentsTab(ws, sandbox, client, refresh = { refreshAgents() }, onChat = { ws.agentId = it; tab = 0 })
+    val scope = rememberCoroutineScope()
+    var panel by rememberSaveable(sandbox.instanceId) { mutableStateOf(Panel.Home) }
+    var tab by rememberSaveable(sandbox.instanceId) { mutableIntStateOf(0) }
+    var editing by remember { mutableStateOf<Bot?>(null) }
+    var creating by remember { mutableStateOf(false) }
+    var toast by remember { mutableStateOf("") }
+    LaunchedEffect(toast) { if (toast.isNotBlank()) { delay(2600); toast = "" } }
+    val main = remember { Handler(Looper.getMainLooper()) }
+
+    suspend fun reload() {
+        val list = withContext(Dispatchers.IO) { bots.client.bots() }
+        bots.replaceBots(list); bots.loading = false
+        val tid = bots.threadId
+        if (tid.isNotBlank()) runCatching { bots.loaded(tid, withContext(Dispatchers.IO) { bots.client.messages(tid) }) }
+    }
+    LaunchedEffect(sandbox.session) {
+        runCatching { reload() }.onFailure { bots.error = it.message ?: "Couldn't load bots"; bots.loading = false }
+        // Live updates, resumed from the last cursor after a drop.
+        withContext(Dispatchers.IO) {
+            var wait = 1000L
+            while (isActive) {
+                try {
+                    bots.cursor = bots.client.events(bots.cursor, stop = { !isActive }) { frame ->
+                        main.post { if (bots.apply(frame)) scope.launch { runCatching { reload() } } }
+                    }
+                    wait = 1000L
+                } catch (e: CancellationException) { throw e } catch (e: HostError) {
+                    if (e.status == 401) bots.client.reattach?.invoke()
+                } catch (_: Exception) { }
+                main.post { bots.live = false }
+                delay(wait); wait = minOf(wait * 2, 15_000L)
             }
         }
     }
-    // Leaving the workspace also leaves the terminal socket; the shell lingers on the host.
-    DisposableEffect(sandbox.instanceId) { onDispose { note = "" } }
-}
+    BackHandler(enabled = panel != Panel.Home) {
+        panel = when (panel) { Panel.Info -> Panel.Chat; Panel.Chat -> if (tab != 0) { tab = 0; Panel.Chat } else Panel.Home; else -> Panel.Home }
+    }
+    fun openBot(b: Bot, thread: String? = null) { bots.select(b, thread); tab = 0; panel = Panel.Chat }
+    fun act(block: suspend () -> Unit) = scope.launch { try { block() } catch (e: CancellationException) { throw e } catch (e: Exception) { toast = e.message ?: "Request failed" } }
 
-@Composable
-private fun ChatTab(ws: WorkspaceState, sandbox: OpenSandbox, client: CloudSandboxClient) {
-    val scope = rememberCoroutineScope()
-    var draft by rememberSaveable { mutableStateOf("") }
-    var sending by remember { mutableStateOf(false) }
-    var elapsed by remember { mutableIntStateOf(0) }
-    val list = rememberLazyListState()
-    LaunchedEffect(ws.chat.size) { if (ws.chat.isNotEmpty()) list.animateScrollToItem(ws.chat.size - 1) }
-    LaunchedEffect(sending) { elapsed = 0; while (sending) { delay(1000); elapsed++ } }
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            ws.agents.forEach { agent -> FilterChip(selected = agent.id == ws.agentId, onClick = { ws.agentId = agent.id }, label = { Text(agent.name) }) }
-        }
-        LazyColumn(state = list, modifier = Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (ws.chat.isEmpty()) item { Text("Ask the agent to build, fix or run something in this workspace. Watch it work in the Desktop tab.", color = secondaryTint) }
-            items(ws.chat) { message -> ChatBubble(message) }
-            if (sending) item { Text("Working… ${elapsed}s", color = secondaryTint, style = MaterialTheme.typography.bodySmall) }
-        }
-        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(draft, { draft = it }, placeholder = { Text("Message the agent") }, modifier = Modifier.weight(1f), maxLines = 5)
-            Button(onClick = {
-                val prompt = draft.trim(); draft = ""; sending = true
-                val agent = ws.agents.firstOrNull { it.id == ws.agentId } ?: ws.agents.first()
-                ws.chat.add(ChatMessage(true, prompt))
-                scope.launch {
-                    val started = System.currentTimeMillis()
-                    ws.chat.add(try {
-                        val reply = withContext(Dispatchers.IO) { client.turn(sandbox.host, sandbox.session, prompt, agent.id.takeIf { it != "main" }) }
-                        ChatMessage(false, reply, "${agent.name} · ${(System.currentTimeMillis() - started) / 100 / 10.0}s")
-                    } catch (e: CancellationException) { throw e } catch (e: Exception) {
-                        ChatMessage(false, e.message ?: "The turn failed", agent.name, error = true)
-                    } finally { sending = false })
+    Box(Modifier.fillMaxSize().background(Vx.bg)) {
+        when (panel) {
+            Panel.Home -> BotHome(bots, sandbox.name, email, onOpen = { openBot(it) }, onNewBot = { creating = true },
+                onProviders = { panel = Panel.Providers }, onRoutines = { panel = Panel.Routines }, onWorkspaces = onBack, onSignOut = onSignOut)
+            Panel.Providers -> ProvidersPanel(bots.client, onBack = { panel = if (bots.botId.isNotBlank() && bots.threadId.isNotBlank()) Panel.Chat else Panel.Home })
+            Panel.Routines -> RoutinesPanel(bots, onBack = { panel = Panel.Home })
+            Panel.Info -> BotInfoPanel(bots, onBack = { panel = Panel.Chat }, onEdit = { editing = bots.bot },
+                onThread = { bots.threadId = it; tab = 0; panel = Panel.Chat },
+                onNewThread = { act { val b = bots.bot ?: return@act; val tid = withContext(Dispatchers.IO) { bots.client.newThread(b.id) }; bots.messages[tid] = androidx.compose.runtime.mutableStateListOf(); bots.threadId = tid; tab = 0; panel = Panel.Chat; runCatching { bots.mergeBot(withContext(Dispatchers.IO) { bots.client.bots() }.first { it.id == b.id }) } } },
+                onRoutines = { panel = Panel.Routines }, onProviders = { panel = Panel.Providers }, onTab = { tab = it; panel = Panel.Chat }, onNotice = { toast = it })
+            Panel.Chat -> Column(Modifier.fillMaxSize()) {
+                val bot = bots.bot
+                Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconAction(Icons.Default.ArrowBack, "Back") { panel = Panel.Home }
+                    if (bot != null) Row(Modifier.weight(1f).clickable { panel = Panel.Info }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        BotAvatarDot(bot.name, bot.color, 32.dp, busy = bot.busy)
+                        Column {
+                            Text(bot.name, color = Vx.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                            Text(bot.threads.firstOrNull { it.id == bots.threadId }?.title ?: "New thread", color = Vx.text3, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    } else Spacer(Modifier.weight(1f))
+                    IconAction(Icons.Default.Info, "Bot details") { panel = Panel.Info }
                 }
-            }, enabled = !sending && draft.isNotBlank()) { Text("Send") }
+                ViewTabs(tab) { tab = it }
+                Box(Modifier.fillMaxWidth().height(1.dp).background(Vx.line))
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    when (tab) {
+                        0 -> BotChatPane(bots, onProviders = { panel = Panel.Providers }, onNotice = { toast = it })
+                        1 -> Box(Modifier.padding(10.dp)) { TerminalTab(ws, sandbox) }
+                        2 -> Box(Modifier.padding(10.dp)) { PreviewTab(api, sandbox, client) }
+                        else -> Box(Modifier.padding(10.dp)) { DesktopTab(api, sandbox, client) }
+                    }
+                }
+            }
         }
+        if (toast.isNotBlank()) Text(toast, color = Vx.text, fontSize = 13.sp, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp).clip(Vx.small).background(Vx.raised2).border(1.dp, Vx.line2, Vx.small).padding(horizontal = 14.dp, vertical = 9.dp).testTag("toast"))
+    }
+    if (creating || editing != null) {
+        val existing = editing
+        BotEditorDialog(existing, canDelete = bots.bots.size > 1, onDismiss = { creating = false; editing = null },
+            onSave = { name, title, instructions, color ->
+                act {
+                    if (existing == null) {
+                        val b = withContext(Dispatchers.IO) { bots.client.createBot(name, title, instructions, color) }
+                        bots.mergeBot(b); openBot(b)
+                    } else {
+                        bots.mergeBot(withContext(Dispatchers.IO) { bots.client.updateBot(existing.id, JSONObject().put("name", name).put("title", title).put("instructions", instructions).put("color", color)) })
+                    }
+                    creating = false; editing = null
+                }
+            },
+            onDelete = { act { withContext(Dispatchers.IO) { bots.client.deleteBot(existing!!.id) }; bots.bots = bots.bots.filterNot { it.id == existing!!.id }; editing = null; panel = Panel.Home } },
+        )
     }
 }
 
 @Composable
-private fun ChatBubble(message: ChatMessage) {
-    val colors = MaterialTheme.colorScheme
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.fromUser) Arrangement.End else Arrangement.Start) {
-        Column(
-            Modifier.widthIn(max = 320.dp)
-                .background(if (message.fromUser) colors.primaryContainer else if (message.error) colors.errorContainer else colors.surfaceVariant, RoundedCornerShape(14.dp))
-                .padding(12.dp),
-        ) {
-            SelectionContainer { Text(message.text, color = if (message.fromUser) colors.onPrimaryContainer else if (message.error) colors.onErrorContainer else colors.onSurfaceVariant) }
-            if (message.meta.isNotBlank()) Text(message.meta, style = MaterialTheme.typography.labelSmall, color = secondaryTint)
+private fun ViewTabs(selected: Int, onSelect: (Int) -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp).clip(RoundedCornerShape(9.dp)).background(Vx.panel).border(1.dp, Vx.line, RoundedCornerShape(9.dp)).padding(3.dp)) {
+        listOf("Chat", "Terminal", "Preview", "Desktop").forEachIndexed { i, label ->
+            Text(label, color = if (selected == i) Vx.text else Vx.text2, fontSize = 13.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center,
+                modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(if (selected == i) Vx.raised2 else Color.Transparent).clickable { onSelect(i) }.padding(vertical = 7.dp).testTag("tab-$label"))
         }
     }
 }
@@ -581,45 +628,3 @@ private fun TerminalTab(ws: WorkspaceState, sandbox: OpenSandbox) {
     }
 }
 
-@Composable
-private fun AgentsTab(ws: WorkspaceState, sandbox: OpenSandbox, client: CloudSandboxClient, refresh: suspend () -> Unit, onChat: (String) -> Unit) {
-    val scope = rememberCoroutineScope()
-    var name by remember { mutableStateOf("") }
-    var instructions by remember { mutableStateOf("") }
-    var note by remember { mutableStateOf("") }
-    var removing by remember { mutableStateOf<SandboxAgent?>(null) }
-    fun act(block: suspend () -> Unit) { scope.launch { note = try { block(); "" } catch (e: CancellationException) { throw e } catch (e: Exception) { e.message ?: "Request failed" } } }
-    LaunchedEffect(Unit) { act { refresh() } }
-    LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        items(ws.agents, key = { it.id }) { agent ->
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(12.dp)) {
-                    Text(agent.name, style = MaterialTheme.typography.titleMedium)
-                    if (agent.instructions.isNotBlank()) Text(agent.instructions, style = MaterialTheme.typography.bodySmall, color = secondaryTint, maxLines = 3)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(onClick = { onChat(agent.id) }) { Text("Chat") }
-                        if (agent.id != "main") TextButton(onClick = { removing = agent }) { Text("Remove", color = MaterialTheme.colorScheme.error) }
-                    }
-                }
-            }
-        }
-        item {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("New agent", style = MaterialTheme.typography.titleSmall)
-                OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(instructions, { instructions = it }, label = { Text("Instructions") }, minLines = 2, modifier = Modifier.fillMaxWidth())
-                Button(onClick = { act { withContext(Dispatchers.IO) { client.putAgent(sandbox.host, sandbox.session, name, instructions) }; name = ""; instructions = ""; refresh() } }, enabled = name.isNotBlank()) { Text("Add agent") }
-                if (note.isNotBlank()) Text(note, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-            }
-        }
-    }
-    removing?.let { agent ->
-        AlertDialog(
-            onDismissRequest = { removing = null },
-            title = { Text("Remove ${agent.name}?") },
-            text = { Text("Its chats in this workspace stop; files stay.") },
-            confirmButton = { TextButton(onClick = { removing = null; act { withContext(Dispatchers.IO) { client.deleteAgent(sandbox.host, sandbox.session, agent.id) }; if (ws.agentId == agent.id) ws.agentId = "main"; refresh() } }) { Text("Remove") } },
-            dismissButton = { TextButton(onClick = { removing = null }) { Text("Cancel") } },
-        )
-    }
-}
