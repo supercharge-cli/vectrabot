@@ -28,6 +28,8 @@ type desktopBridge struct {
 
 	mu      sync.Mutex
 	tickets map[string]vncTicket
+	// viewing marks a connected viewer as activity; it returns the release.
+	viewing func() func()
 }
 
 type vncTicket struct {
@@ -290,6 +292,9 @@ func (d *desktopBridge) serveVNC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.CloseNow()
+	if d.viewing != nil {
+		defer d.viewing()()
+	}
 	conn.SetReadLimit(4 << 20)
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()

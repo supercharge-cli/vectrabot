@@ -46,7 +46,9 @@ func main() {
 
 func newServer(tokens *tokenStore, root string) http.Handler {
 	state := openState(root)
+	work := &activity{}
 	desktop := newDesktopBridge()
+	desktop.viewing = func() func() { return work.track(&work.viewers) }
 	mux := http.NewServeMux()
 	guard := func(pattern string, handler http.HandlerFunc) {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
@@ -62,8 +64,15 @@ func newServer(tokens *tokenStore, root string) http.Handler {
 	})
 	guard("GET /v1/files", func(w http.ResponseWriter, r *http.Request) { serveReadFile(root, w, r) })
 	guard("PUT /v1/files", func(w http.ResponseWriter, r *http.Request) { serveWriteFile(root, w, r) })
-	guard("GET /v1/terminal", func(w http.ResponseWriter, r *http.Request) { serveTerminal(root, w, r) })
-	guard("POST /v1/turns", func(w http.ResponseWriter, r *http.Request) { serveTurn(root, state, w, r) })
+	guard("GET /v1/status", work.serveStatus)
+	guard("GET /v1/terminal", func(w http.ResponseWriter, r *http.Request) {
+		defer work.track(&work.terminals)()
+		serveTerminal(root, w, r)
+	})
+	guard("POST /v1/turns", func(w http.ResponseWriter, r *http.Request) {
+		defer work.track(&work.turns)()
+		serveTurn(root, state, w, r)
+	})
 	guard("GET /v1/preview", servePreview)
 	guard("/v1/agents", func(w http.ResponseWriter, r *http.Request) { serveAgents(state, w, r) })
 	guard("/v1/settings", func(w http.ResponseWriter, r *http.Request) { serveSettings(state, w, r) })

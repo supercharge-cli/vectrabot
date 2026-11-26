@@ -236,3 +236,49 @@ func TestTurnUsesSingleShotCLIAndSurfacesErrors(t *testing.T) {
 		t.Fatalf("unknown agent %d", code)
 	}
 }
+
+func TestStatusReportsOpenTerminalsAsWork(t *testing.T) {
+	dir := t.TempDir()
+	shell := filepath.Join(dir, "sh")
+	if err := os.WriteFile(shell, []byte("#!/bin/sh\nexec cat\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("VECTRABOT_SHELL", shell)
+	srv := httptest.NewServer(newServer(testTokens(), filepath.Join(dir, "ws")))
+	defer srv.Close()
+	busy := func() (bool, int) {
+		_, out := authed(t, "GET", srv.URL+"/v1/status", "")
+		tasks, _ := out["backgroundTasks"].([]any)
+		return out["turn"].(map[string]any)["busy"].(bool), len(tasks)
+	}
+	if turn, tasks := busy(); turn || tasks != 0 {
+		t.Fatalf("idle host reports work: %v %d", turn, tasks)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, strings.Replace(srv.URL, "http", "ws", 1)+"/v1/terminal?token=secret", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, tasks := busy(); tasks == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("open terminal not reported")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	conn.Close(websocket.StatusNormalClosure, "")
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		if _, tasks := busy(); tasks == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("closed terminal still reported")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
