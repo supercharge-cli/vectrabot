@@ -65,21 +65,30 @@ func newServer(tokens *tokenStore, root string) http.Handler {
 	guard("GET /v1/files", func(w http.ResponseWriter, r *http.Request) { serveReadFile(root, w, r) })
 	guard("PUT /v1/files", func(w http.ResponseWriter, r *http.Request) { serveWriteFile(root, w, r) })
 	guard("GET /v1/status", work.serveStatus)
+	shells := newShellPool(root)
 	guard("GET /v1/terminal", func(w http.ResponseWriter, r *http.Request) {
 		defer work.track(&work.terminals)()
-		serveTerminal(root, w, r)
+		shells.serve(w, r)
 	})
 	guard("POST /v1/turns", func(w http.ResponseWriter, r *http.Request) {
 		defer work.track(&work.turns)()
 		serveTurn(root, state, w, r)
 	})
 	guard("GET /v1/preview", servePreview)
+	guard("GET /v1/ports", servePorts)
+	guard("GET /v1/computer/clipboard", serveClipboard)
+	guard("POST /v1/computer/clipboard", serveClipboard)
 	guard("/v1/agents", func(w http.ResponseWriter, r *http.Request) { serveAgents(state, w, r) })
 	guard("/v1/settings", func(w http.ResponseWriter, r *http.Request) { serveSettings(state, w, r) })
 	guard("GET /v1/screen", serveScreen)
 	guard("GET /v1/computer/status", desktop.serveStatus)
 	guard("POST /v1/computer/handoff", desktop.serveHandoff)
 	guard("GET /v1/computer/vnc-ticket", desktop.serveTicket)
+	screen := newScreenGrabber(desktop.vncAddr)
+	guard("GET /v1/computer/frame", func(w http.ResponseWriter, r *http.Request) {
+		defer work.track(&work.viewers)()
+		screen.serveFrame(w, r)
+	})
 	// The viewer is a browser WebSocket: it proves itself with a one-use ticket
 	// minted by an authorized vnc-ticket call instead of a header.
 	mux.HandleFunc("GET /v1/computer/browser/vnc", desktop.serveVNC)

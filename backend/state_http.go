@@ -25,6 +25,17 @@ func serveAgents(state *diskState, w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"agent": agent, "engine": "supercharge"})
+	case http.MethodDelete:
+		removed, err := state.deleteAgent(r.URL.Query().Get("id"))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		if !removed {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"agents": state.listAgents()})
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}

@@ -1,271 +1,607 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Vectrabot</title>
-  <style>
-    :root { color-scheme: dark; }
-    body { margin: 0; font: 15px/1.45 system-ui, sans-serif; background: #0b0d10; color: #e7ecf1; }
-    main { max-width: 960px; margin: 0 auto; padding: 28px 20px 48px; }
-    h1 { font-size: 1.4rem; margin: 0 0 8px; }
-    p.lede { color: #9aa6b2; margin-top: 0; }
-    label, button, input, select { font: inherit; }
-    select { margin: 6px 0 12px; padding: 6px 8px; border-radius: 8px; border: 1px solid #2a3340; background: #11161c; color: inherit; }
-    input { width: 100%; box-sizing: border-box; margin: 6px 0 12px; padding: 8px 10px; border-radius: 8px; border: 1px solid #2a3340; background: #11161c; color: inherit; }
-    button { border: 0; border-radius: 8px; padding: 8px 12px; background: #1d6fbf; color: white; cursor: pointer; }
-    button.ghost { background: transparent; color: #9ec6ef; }
-    .row { display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #1c2430; }
-    .tabs { display: flex; gap: 8px; margin: 16px 0; }
-    pre, iframe { width: 100%; box-sizing: border-box; background: #07090c; border: 1px solid #243041; border-radius: 10px; }
-    pre { min-height: 220px; max-height: 320px; overflow: auto; padding: 12px; white-space: pre-wrap; }
-    iframe { height: 420px; background: white; }
-    .error { color: #ff8d8d; }
-  </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<title>Vectrabot</title>
+<link rel="stylesheet" href="https://esm.sh/@xterm/xterm@5.5.0/css/xterm.css" />
+<style>
+  :root {
+    --bg: #0b0d10; --panel: #11161c; --panel-2: #161c24; --line: #232c38; --line-2: #2e3a49;
+    --text: #e7ecf1; --muted: #8d99a6; --accent: #3d8bfd; --accent-2: #9ec6ef; --good: #3ccf91; --warn: #f2b84b; --bad: #ff7b7b;
+    --radius: 12px; color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  button { border: 0; border-radius: 9px; padding: 8px 14px; background: var(--accent); color: #fff; cursor: pointer; font-weight: 550; }
+  button:hover:not(:disabled) { filter: brightness(1.08); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.ghost { background: transparent; color: var(--accent-2); border: 1px solid var(--line-2); }
+  button.danger { background: #3a1c1f; color: var(--bad); border: 1px solid #5a2a2e; }
+  button.icon { padding: 6px 10px; }
+  input, select, textarea { background: var(--panel); border: 1px solid var(--line-2); border-radius: 9px; padding: 9px 11px; outline: none; }
+  input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+  [hidden] { display: none !important; }
+  .muted { color: var(--muted); }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 99px; font-size: 12px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); }
+  .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+  .pill.good::before { background: var(--good); } .pill.warn::before { background: var(--warn); } .pill.bad::before { background: var(--bad); }
+
+  /* Sign in and workspace list */
+  .center { min-height: 100%; display: grid; place-items: center; padding: 24px; }
+  .card { width: min(420px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 28px; }
+  .card h1 { margin: 0 0 4px; font-size: 22px; }
+  .card label { display: block; margin-top: 14px; color: var(--muted); font-size: 13px; }
+  .card input { width: 100%; margin-top: 6px; }
+  .card button { width: 100%; margin-top: 20px; padding: 11px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: .2px; }
+  .brand .logo { width: 26px; height: 26px; border-radius: 8px; background: linear-gradient(135deg, #3d8bfd, #7b5cff); display: grid; place-items: center; font-size: 14px; color: #fff; }
+  .list { width: min(720px, 100%); }
+  .list header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
+  .ws { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); margin-bottom: 10px; }
+  .ws strong { display: block; }
+  .empty { padding: 28px; text-align: center; border: 1px dashed var(--line-2); border-radius: var(--radius); color: var(--muted); }
+
+  /* Workspace shell */
+  .shell { display: grid; grid-template-columns: 210px 1fr; grid-template-rows: 54px 1fr; height: 100vh; }
+  .top { grid-column: 1 / -1; display: flex; align-items: center; gap: 14px; padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  .top .spacer { flex: 1; }
+  nav.side { border-right: 1px solid var(--line); padding: 12px 10px; display: flex; flex-direction: column; gap: 4px; background: #0d1116; }
+  nav.side button { background: transparent; color: var(--muted); text-align: left; padding: 9px 12px; font-weight: 500; display: flex; gap: 10px; align-items: center; }
+  nav.side button.on { background: var(--panel-2); color: var(--text); box-shadow: inset 3px 0 0 var(--accent); }
+  nav.side .hint { margin-top: auto; font-size: 12px; color: var(--muted); padding: 10px; line-height: 1.4; }
+  main.pane { min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+  section.view { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 16px; gap: 12px; }
+  .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .toolbar .grow { flex: 1; }
+  .banner { padding: 9px 12px; border-radius: 9px; background: #2a1517; color: #ffb3b3; border: 1px solid #4b2427; }
+  .banner.info { background: #12202f; color: #bcd8f5; border-color: #1f3a57; }
+
+  /* Chat */
+  .chat-log { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 6px 4px; }
+  .msg { max-width: min(760px, 88%); padding: 10px 14px; border-radius: 14px; white-space: pre-wrap; word-wrap: break-word; }
+  .msg.user { align-self: flex-end; background: #1d4f8f; border-bottom-right-radius: 4px; }
+  .msg.agent { align-self: flex-start; background: var(--panel-2); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+  .msg.error { align-self: flex-start; background: #2a1517; border: 1px solid #4b2427; color: #ffb3b3; }
+  .msg .meta { display: block; font-size: 11px; color: var(--muted); margin-top: 6px; }
+  .msg code { background: #0a0e13; padding: 1px 5px; border-radius: 5px; font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .msg pre { background: #0a0e13; border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow-x: auto; white-space: pre; font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; margin: 8px 0 0; }
+  .typing { align-self: flex-start; color: var(--muted); font-size: 13px; padding: 4px 6px; }
+  .composer { display: flex; gap: 8px; align-items: flex-end; }
+  .composer textarea { flex: 1; resize: none; min-height: 44px; max-height: 180px; }
+
+  /* Desktop */
+  .stage { flex: 1; min-height: 0; position: relative; background: #000; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; display: grid; place-items: center; }
+  .stage img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+  .stage .vnc { position: absolute; inset: 0; }
+  .stage .overlay { position: absolute; left: 12px; top: 12px; }
+  .stage .placeholder { color: var(--muted); text-align: center; padding: 20px; }
+  .clip { display: flex; gap: 8px; align-items: flex-start; }
+  .clip textarea { flex: 1; min-height: 38px; height: 38px; resize: vertical; }
+
+  /* Preview */
+  .frame { flex: 1; min-height: 0; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; width: 100%; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip { background: var(--panel-2); color: var(--text); border: 1px solid var(--line-2); padding: 4px 10px; border-radius: 99px; font-weight: 500; }
+  .chip.on { border-color: var(--accent); color: var(--accent-2); }
+
+  /* Terminal */
+  .term { flex: 1; min-height: 0; background: #07090c; border: 1px solid var(--line); border-radius: var(--radius); padding: 8px; }
+
+  /* Agents */
+  .agents { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); overflow-y: auto; }
+  .agent { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; gap: 8px; }
+  .agent p { margin: 0; color: var(--muted); white-space: pre-wrap; max-height: 120px; overflow: auto; }
+  .agent-form { display: grid; gap: 8px; grid-template-columns: 1fr; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; }
+  .agent-form textarea { min-height: 70px; resize: vertical; }
+
+  @media (max-width: 760px) {
+    .shell { grid-template-columns: 1fr; grid-template-rows: 54px auto 1fr; }
+    nav.side { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 6px; }
+    nav.side .hint { display: none; }
+    nav.side button.on { box-shadow: inset 0 -3px 0 var(--accent); }
+    .msg { max-width: 94%; }
+  }
+</style>
 </head>
 <body>
-<main>
-  <h1>Vectrabot</h1>
-  <p class="lede">The same cloud workspace on this computer and on the phone. Work runs in the sandbox.</p>
-  <section id="login">
-    <label>Email <input id="email" autocomplete="username" /></label>
-    <label>Password <input id="password" type="password" autocomplete="current-password" /></label>
-    <button id="signin" type="button">Sign in</button>
-  </section>
-  <section id="app" hidden>
+<div id="login" class="center">
+  <form class="card" id="login-form">
+    <div class="brand"><span class="logo">V</span> Vectrabot</div>
+    <p class="muted">Sign in with your Vectra account. Your workspace runs in the cloud; this screen and your phone are windows into it.</p>
+    <label>Email <input id="email" type="email" autocomplete="username" required /></label>
+    <label>Password <input id="password" type="password" autocomplete="current-password" required /></label>
+    <button id="signin" type="submit">Sign in</button>
+    <p id="login-error" class="muted" style="color:var(--bad)"></p>
+  </form>
+</div>
+
+<div id="workspaces" class="center" hidden>
+  <div class="list">
+    <header>
+      <div class="brand"><span class="logo">V</span> Your workspaces</div>
+      <div class="toolbar"><button class="ghost" id="refresh" type="button">Refresh</button><button class="ghost" id="signout" type="button">Sign out</button></div>
+    </header>
     <div id="list"></div>
-    <div id="workspace" hidden>
-      <p class="lede">If nothing is running, the sandbox pauses after 15 minutes and keeps its memory. Opening it, a command, or Take over wakes it.</p>
-      <div class="tabs">
-        <button type="button" data-tab="chat">Chat</button>
-        <button type="button" data-tab="terminal">Terminal</button>
-        <button type="button" data-tab="preview">Preview</button>
-        <button type="button" data-tab="desktop">Desktop</button>
-        <button type="button" data-tab="settings">Settings</button>
+    <p id="list-error" class="muted" style="color:var(--bad)"></p>
+  </div>
+</div>
+
+<div id="workspace" class="shell" hidden>
+  <div class="top">
+    <div class="brand"><span class="logo">V</span></div>
+    <button class="ghost icon" id="back" type="button" title="All workspaces">← Workspaces</button>
+    <strong id="ws-name">Workspace</strong>
+    <span id="ws-state" class="pill">Connecting</span>
+    <div class="spacer"></div>
+    <span id="ws-error" class="muted" style="color:var(--bad);max-width:46vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+  </div>
+  <nav class="side" id="tabs">
+    <button type="button" data-tab="chat" class="on">💬 Chat</button>
+    <button type="button" data-tab="desktop">🖥 Desktop</button>
+    <button type="button" data-tab="preview">🌐 Preview</button>
+    <button type="button" data-tab="terminal">⌨ Terminal</button>
+    <button type="button" data-tab="agents">🤖 Agents</button>
+    <div class="hint">The sandbox pauses after 15 idle minutes and keeps everything. Opening it again wakes it.</div>
+  </nav>
+  <main class="pane">
+    <section class="view" id="chat">
+      <div class="toolbar">
+        <label class="muted">Agent <select id="chat-agent"></select></label>
+        <div class="grow"></div>
+        <button class="ghost" id="chat-clear" type="button">Clear</button>
       </div>
-      <div id="chat">
-        <label>Agent <select id="chat-agent"><option value="">Main</option></select></label>
-        <pre id="chat-log">Ask the agent to do something in this workspace.</pre>
-        <form id="chat-form">
-          <input id="chat-prompt" placeholder="Message the agent" autocomplete="off" />
-          <button id="chat-send" type="submit">Send</button>
-        </form>
+      <div class="chat-log" id="chat-log"></div>
+      <form class="composer" id="chat-form">
+        <textarea id="chat-prompt" rows="1" placeholder="Ask the agent to do something in this workspace… (Enter to send, Shift+Enter for a new line)"></textarea>
+        <button id="chat-send" type="submit">Send</button>
+      </form>
+    </section>
+
+    <section class="view" id="desktop" hidden>
+      <div class="toolbar">
+        <span id="desk-state" class="pill">Live view</span>
+        <span id="desk-timer" class="muted"></span>
+        <div class="grow"></div>
+        <button id="takeover" type="button">Take control</button>
+        <button id="reconnect" class="ghost" type="button" hidden>Reconnect</button>
+        <button id="fullscreen" class="ghost" type="button">Full screen</button>
+        <button id="return-control" class="danger" type="button" hidden>Return control</button>
       </div>
-      <div id="terminal" hidden>
-        <pre id="screen">Connecting…</pre>
-        <form id="shell">
-          <input id="command" placeholder="Type a command" />
-          <button type="submit">Send</button>
-        </form>
+      <div class="stage" id="stage">
+        <img id="live" alt="The agent's desktop" hidden />
+        <div class="vnc" id="vnc" hidden></div>
+        <div class="placeholder" id="desk-placeholder">Connecting to the agent's desktop…</div>
       </div>
-      <div id="preview" hidden>
-        <form id="preview-form">
-          <input id="port" value="3000" />
-          <button type="submit">Open preview</button>
-        </form>
-        <iframe id="preview-frame" title="Preview"></iframe>
+      <div class="clip" id="clip" hidden>
+        <textarea id="clip-text" placeholder="Clipboard: text copied on the desktop appears here; type or paste here and send it to the desktop."></textarea>
+        <button class="ghost" id="clip-send" type="button">Send to desktop</button>
+        <button class="ghost" id="clip-copy" type="button">Copy</button>
       </div>
-      <div id="desktop" hidden>
-        <button id="takeover" type="button">Take over</button>
-        <button id="return-control" class="ghost" type="button">Return control</button>
-        <div id="vnc" style="height:420px;background:#000"></div>
+    </section>
+
+    <section class="view" id="preview" hidden>
+      <form class="toolbar" id="preview-form">
+        <label class="muted">Port <input id="port" inputmode="numeric" style="width:90px" value="3000" /></label>
+        <button type="submit">Open</button>
+        <div class="chips" id="ports"></div>
+        <div class="grow"></div>
+        <button class="ghost" id="preview-reload" type="button">Reload</button>
+        <button class="ghost" id="preview-open" type="button">Open in browser ↗</button>
+      </form>
+      <div id="preview-note" class="banner info" hidden></div>
+      <iframe class="frame" id="preview-frame" title="Preview" referrerpolicy="no-referrer"></iframe>
+    </section>
+
+    <section class="view" id="terminal" hidden>
+      <div class="toolbar">
+        <span id="term-state" class="pill">Disconnected</span>
+        <div class="grow"></div>
+        <button class="ghost" id="term-reconnect" type="button">Reconnect</button>
+        <button class="ghost" id="term-new" type="button">New shell</button>
       </div>
-      <div id="settings" hidden>
-        <form id="agent-form">
-          <input id="agent-name" placeholder="New agent name" />
-          <button type="submit">Add agent</button>
-        </form>
-        <pre id="settings-body"></pre>
-      </div>
-    </div>
-  </section>
-  <p id="error" class="error"></p>
-</main>
-<script>
+      <div class="term" id="term"></div>
+    </section>
+
+    <section class="view" id="agents" hidden>
+      <form class="agent-form" id="agent-form">
+        <strong>New agent</strong>
+        <input id="agent-name" placeholder="Name, e.g. Reviewer" maxlength="80" required />
+        <textarea id="agent-instructions" placeholder="Instructions: what this agent does and how it should work"></textarea>
+        <div class="toolbar"><button type="submit">Add agent</button><span id="agent-msg" class="muted"></span></div>
+      </form>
+      <div class="agents" id="agent-list"></div>
+    </section>
+  </main>
+</div>
+
+<script type="module">
 // A page served from this machine may point at a local cloud for testing.
 // Anywhere else it always signs in to the real cloud.
 const LOCAL_PAGE = ["localhost", "127.0.0.1"].includes(location.hostname);
 const CLOUD = (LOCAL_PAGE && new URLSearchParams(location.search).get("cloud")) || "https://infra.xibeai.in";
-const state = { token: "", sandbox: null, socket: null };
-const error = document.querySelector("#error");
-function fail(e) { error.textContent = e.message || String(e); }
+const $ = (s) => document.querySelector(s);
+const store = sessionStorage; // the sign-in lasts for this window only
+const state = { token: store.getItem("vb.token") || "", ws: null, tab: "chat" };
+
+// ---------- cloud + host calls ----------
 async function cloud(path, options = {}) {
   const headers = { accept: "application/json", ...(options.body ? { "content-type": "application/json" } : {}), ...(state.token ? { authorization: "Bearer " + state.token } : {}) };
-  const response = await fetch(CLOUD + path, { ...options, headers });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.error || "Cloud request failed");
+  const res = await fetch(CLOUD + path, { ...options, headers });
+  const body = await res.json().catch(() => ({}));
+  if (res.status === 401 && state.token) { signOut("Your sign-in expired. Sign in again."); throw new Error("Signed out"); }
+  if (!res.ok) throw new Error(body.error || `Cloud request failed (${res.status})`);
   return body;
 }
-document.querySelector("#signin").onclick = async () => {
-  error.textContent = "";
+async function host(path, options = {}) {
+  if (!state.ws) throw new Error("No workspace open");
+  const res = await fetch(state.ws.host + path, { ...options, headers: { accept: "application/json", ...(options.body ? { "content-type": "application/json" } : {}), authorization: "Bearer " + state.ws.session } });
+  const body = await res.json().catch(() => ({}));
+  if (res.status === 401) { await reattach(); throw new Error("Session refreshed, try again"); }
+  if (!res.ok) throw new Error(body.error || `Sandbox request failed (${res.status})`);
+  return body;
+}
+const enc = encodeURIComponent;
+const inst = (p) => `/api/instances/${enc(state.ws.id)}${p}`;
+function wsError(message) { $("#ws-error").textContent = message || ""; $("#ws-error").title = message || ""; }
+function setPill(el, text, kind) { el.textContent = text; el.className = "pill" + (kind ? " " + kind : ""); }
+
+// ---------- sign in / list ----------
+function show(screen) { for (const id of ["login", "workspaces", "workspace"]) $("#" + id).hidden = id !== screen; }
+function signOut(message = "") {
+  closeWorkspace(); state.token = ""; store.removeItem("vb.token");
+  $("#login-error").textContent = message; show("login");
+}
+$("#login-form").onsubmit = async (e) => {
+  e.preventDefault(); $("#login-error").textContent = ""; $("#signin").disabled = true;
   try {
-    const signed = await cloud("/api/auth/login", { method: "POST", body: JSON.stringify({ email: email.value.trim(), password: password.value }) });
-    if (!signed.token) throw new Error("Server did not return a token");
-    state.token = signed.token;
-    const list = await cloud("/api/instances");
-    document.querySelector("#login").hidden = true;
-    document.querySelector("#app").hidden = false;
-    const box = document.querySelector("#list");
-    box.replaceChildren();
-    for (const item of list.instances || []) {
-      const row = document.createElement("div");
-      row.className = "row";
-      row.innerHTML = `<span></span><button type="button">Open</button>`;
-      row.querySelector("span").textContent = item.name || "Workspace";
-      row.querySelector("button").onclick = () => openWorkspace(item.id);
+    const signed = await cloud("/api/auth/login", { method: "POST", body: JSON.stringify({ email: $("#email").value.trim(), password: $("#password").value }) });
+    if (!signed.token) throw new Error("The cloud did not return a session");
+    state.token = signed.token; store.setItem("vb.token", signed.token); $("#password").value = "";
+    await loadList();
+  } catch (err) { $("#login-error").textContent = err.message; }
+  finally { $("#signin").disabled = false; }
+};
+$("#signout").onclick = () => signOut();
+$("#refresh").onclick = () => loadList();
+async function loadList() {
+  show("workspaces"); $("#list-error").textContent = "";
+  const box = $("#list"); box.replaceChildren();
+  try {
+    const { instances = [] } = await cloud("/api/instances");
+    if (!instances.length) { box.innerHTML = `<div class="empty">No workspaces yet. Create one on <a href="${CLOUD}" target="_blank" rel="noreferrer" style="color:var(--accent-2)">${CLOUD.replace(/^https?:\/\//, "")}</a>, then refresh.</div>`; return; }
+    for (const item of instances) {
+      const row = document.createElement("div"); row.className = "ws";
+      const status = item.status || "unknown";
+      row.innerHTML = `<div><strong></strong><span class="pill"></span></div><button type="button">Open</button>`;
+      row.querySelector("strong").textContent = item.name || "Workspace";
+      setPill(row.querySelector(".pill"), status, status === "running" ? "good" : status === "paused" ? "warn" : status === "error" ? "bad" : "");
+      row.querySelector("button").onclick = () => openWorkspace(item);
       box.append(row);
     }
-  } catch (e) { fail(e); }
-};
-async function openWorkspace(id) {
-  error.textContent = "";
+  } catch (err) { $("#list-error").textContent = err.message; }
+}
+
+// ---------- open / attach ----------
+async function attach(id) {
+  const a = await cloud(`/api/instances/${enc(id)}/attach`, { method: "POST", body: JSON.stringify({ device: "pc" }) });
+  if (!a.url || !a.token) throw new Error("The sandbox did not return a session");
+  return { host: a.url.replace(/\/$/, ""), session: a.token };
+}
+let reattaching = null;
+async function reattach() {
+  if (!state.ws) return;
+  reattaching ||= attach(state.ws.id).then((s) => Object.assign(state.ws, s)).finally(() => { reattaching = null; });
+  return reattaching;
+}
+async function openWorkspace(item) {
+  show("workspace"); wsError(""); $("#ws-name").textContent = item.name || "Workspace";
+  setPill($("#ws-state"), item.status === "paused" ? "Waking…" : "Connecting…", "warn");
+  state.ws = { id: item.id, name: item.name, host: "", session: "" };
   try {
-    await cloud(`/api/instances/${encodeURIComponent(id)}/wake`, { method: "POST", body: "{}" });
-    const attach = await cloud(`/api/instances/${encodeURIComponent(id)}/attach`, { method: "POST", body: JSON.stringify({ device: "pc" }) });
-    if (!attach.url || !attach.token) throw new Error("Sandbox did not return a session");
-    state.sandbox = { id, host: attach.url.replace(/\/$/, ""), session: attach.token };
-    document.querySelector("#workspace").hidden = false;
-    connectTerminal();
-    await loadSettings();
-  } catch (e) { fail(e); }
+    Object.assign(state.ws, await attach(item.id));
+    setPill($("#ws-state"), "Running", "good");
+    await loadAgents();
+    renderChat();
+    selectTab(state.tab);
+  } catch (err) { setPill($("#ws-state"), "Unavailable", "bad"); wsError(err.message); }
+}
+function closeWorkspace() {
+  stopLive(); endControl({ silent: true }); closeTerminal();
+  state.ws = null;
+}
+$("#back").onclick = () => { closeWorkspace(); loadList(); };
+document.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => selectTab(b.dataset.tab)));
+function selectTab(tab) {
+  state.tab = tab;
+  document.querySelectorAll("[data-tab]").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
+  for (const v of ["chat", "desktop", "preview", "terminal", "agents"]) $("#" + v).hidden = v !== tab;
+  if (!state.ws?.session) return;
+  if (tab === "desktop") startDesktop(); else stopLive();
+  if (tab === "terminal") openTerminal();
+  if (tab === "preview") refreshPorts();
+  if (tab === "chat") $("#chat-prompt").focus();
+}
+
+// ---------- chat ----------
+const chatHistory = () => JSON.parse(localStorage.getItem("vb.chat." + state.ws.id) || "[]");
+const saveHistory = (items) => localStorage.setItem("vb.chat." + state.ws.id, JSON.stringify(items.slice(-200)));
+function escapeHtml(s) { return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+function richText(text) {
+  return escapeHtml(text).split(/```/).map((part, i) => i % 2 ? `<pre>${part.replace(/^[a-z0-9_-]*\n/i, "")}</pre>` : part.replace(/`([^`\n]+)`/g, "<code>$1</code>").replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")).join("");
+}
+function addBubble(m) {
+  const el = document.createElement("div"); el.className = "msg " + m.role;
+  el.innerHTML = richText(m.text);
+  if (m.meta) { const meta = document.createElement("span"); meta.className = "meta"; meta.textContent = m.meta; el.append(meta); }
+  $("#chat-log").append(el); $("#chat-log").scrollTop = $("#chat-log").scrollHeight;
+}
+function renderChat() {
+  $("#chat-log").replaceChildren();
+  const items = chatHistory();
+  if (!items.length) addBubble({ role: "agent", text: "Hi! I work inside this workspace's cloud sandbox. Ask me to build, fix, or run something.", meta: "Tip: watch me work in the Desktop tab." });
+  items.forEach(addBubble);
+}
+$("#chat-clear").onclick = () => { saveHistory([]); renderChat(); };
+const prompt = $("#chat-prompt");
+prompt.addEventListener("input", () => { prompt.style.height = "auto"; prompt.style.height = Math.min(prompt.scrollHeight, 180) + "px"; });
+prompt.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("#chat-form").requestSubmit(); } });
+$("#chat-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const text = prompt.value.trim(); if (!text || !state.ws?.session) return;
+  const items = chatHistory(); const agentId = $("#chat-agent").value;
+  const agentName = $("#chat-agent").selectedOptions[0]?.textContent || "Agent";
+  items.push({ role: "user", text }); saveHistory(items); addBubble({ role: "user", text });
+  prompt.value = ""; prompt.style.height = "auto"; $("#chat-send").disabled = true;
+  const typing = document.createElement("div"); typing.className = "typing"; $("#chat-log").append(typing);
+  const t0 = Date.now(); const tick = setInterval(() => { typing.textContent = `${agentName} is working… ${Math.round((Date.now() - t0) / 1000)}s`; }, 500);
+  try {
+    const reply = await host("/v1/turns", { method: "POST", body: JSON.stringify({ engine: "supercharge", prompt: text, ...(agentId ? { agentId } : {}) }) });
+    const model = Object.keys(reply.reply?.modelUsage || {})[0];
+    const m = { role: "agent", text: reply.output || "(no reply)", meta: `${agentName}${model ? " · " + model : ""} · ${((Date.now() - t0) / 1000).toFixed(1)}s` };
+    const next = chatHistory(); next.push(m); saveHistory(next); addBubble(m);
+  } catch (err) {
+    const m = { role: "error", text: err.message, meta: agentName };
+    const next = chatHistory(); next.push(m); saveHistory(next); addBubble(m);
+  } finally { clearInterval(tick); typing.remove(); $("#chat-send").disabled = false; prompt.focus(); }
+};
+
+// ---------- agents ----------
+async function loadAgents() {
+  const { agents = [] } = await host("/v1/agents");
+  const select = $("#chat-agent"); const chosen = select.value; select.replaceChildren();
+  for (const a of agents) { const o = document.createElement("option"); o.value = a.id === "main" ? "" : a.id; o.textContent = a.name || a.id; select.append(o); }
+  if ([...select.options].some((o) => o.value === chosen)) select.value = chosen;
+  const list = $("#agent-list"); list.replaceChildren();
+  for (const a of agents) {
+    const card = document.createElement("div"); card.className = "agent";
+    card.innerHTML = `<div class="toolbar"><strong></strong><span class="pill"></span><div class="grow"></div></div><p></p>`;
+    card.querySelector("strong").textContent = a.name || a.id;
+    setPill(card.querySelector(".pill"), a.id === "main" ? "main" : a.id, a.id === "main" ? "good" : "");
+    card.querySelector("p").textContent = a.instructions || "No instructions.";
+    const row = card.querySelector(".toolbar");
+    const chat = document.createElement("button"); chat.className = "ghost"; chat.textContent = "Chat"; chat.type = "button";
+    chat.onclick = () => { $("#chat-agent").value = a.id === "main" ? "" : a.id; selectTab("chat"); };
+    row.append(chat);
+    if (a.id !== "main") {
+      const del = document.createElement("button"); del.className = "danger"; del.textContent = "Remove"; del.type = "button";
+      del.onclick = async () => { if (!confirm(`Remove ${a.name}?`)) return; try { await host(`/v1/agents?id=${enc(a.id)}`, { method: "DELETE" }); await loadAgents(); } catch (err) { $("#agent-msg").textContent = err.message; } };
+      row.append(del);
+    }
+    list.append(card);
+  }
+}
+$("#agent-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const name = $("#agent-name").value.trim();
+  const id = name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "").replace(/^-+|-+$/g, "").slice(0, 64);
+  if (!id) { $("#agent-msg").textContent = "Use letters or numbers in the name."; return; }
+  try {
+    await host("/v1/agents", { method: "PUT", body: JSON.stringify({ id, name, instructions: $("#agent-instructions").value.trim(), engine: "supercharge" }) });
+    $("#agent-name").value = ""; $("#agent-instructions").value = ""; $("#agent-msg").textContent = `Added ${name}.`;
+    await loadAgents();
+  } catch (err) { $("#agent-msg").textContent = err.message; }
+};
+
+// ---------- desktop: live view + take control ----------
+const desk = { live: false, version: 0, url: "", control: null, rfb: null, timer: null };
+function stagePlaceholder(text) { $("#desk-placeholder").textContent = text; $("#desk-placeholder").hidden = !text; }
+async function startDesktop() {
+  if (desk.control) return;
+  try {
+    const status = await cloud(inst("/computer/status?botId=main"));
+    if (status.handoff && !desk.control) setPill($("#desk-state"), "Someone else has control", "warn");
+  } catch { /* status is informational */ }
+  startLive();
+}
+async function startLive() {
+  if (desk.live || desk.control) return;
+  desk.live = true; setPill($("#desk-state"), "Live view · agent in control", "good");
+  $("#vnc").hidden = true;
+  while (desk.live && state.ws && !document.hidden) {
+    try {
+      const res = await fetch(`${state.ws.host}/v1/computer/frame?after=${desk.version}`, { headers: { authorization: "Bearer " + state.ws.session } });
+      if (!desk.live) break;
+      if (res.status === 401) { await reattach(); continue; }
+      if (res.status === 200) {
+        desk.version = Number(res.headers.get("x-frame-version")) || desk.version + 1;
+        const url = URL.createObjectURL(await res.blob());
+        const img = $("#live"); img.src = url; img.hidden = false; stagePlaceholder("");
+        if (desk.url) URL.revokeObjectURL(desk.url); desk.url = url;
+      } else if (res.status !== 204) {
+        const body = await res.json().catch(() => ({}));
+        stagePlaceholder(body.error || "The desktop is starting…"); await sleep(1500);
+      }
+    } catch { stagePlaceholder("Reconnecting to the desktop…"); await sleep(1500); }
+  }
+  desk.live = false;
+}
+function stopLive() { desk.live = false; }
+document.addEventListener("visibilitychange", () => { if (!document.hidden && state.tab === "desktop" && state.ws) startLive(); });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function vncTicket() {
+  const t = await cloud(inst("/computer/vnc-ticket"), { method: "POST", body: JSON.stringify({ handoffId: desk.control.id, botId: "main" }) });
+  if (!t.wsUrl) throw new Error(t.error || "Desktop connection unavailable");
+  return t.wsUrl;
+}
+let RFB;
+async function connectVnc() {
+  RFB ||= (await import("https://esm.sh/@novnc/novnc@1.5.0")).default;
+  desk.rfb?.disconnect();
+  const view = $("#vnc"); view.replaceChildren(); view.hidden = false; $("#live").hidden = true; stagePlaceholder("");
+  const rfb = new RFB(view, await vncTicket(), { shared: true, credentials: {} });
+  desk.rfb = rfb;
+  rfb.scaleViewport = true; rfb.resizeSession = false; rfb.qualityLevel = 8; rfb.compressionLevel = 2; rfb.focusOnClick = true;
+  rfb.addEventListener("connect", () => { setPill($("#desk-state"), "You have control", "good"); $("#reconnect").hidden = true; rfb.focus(); });
+  rfb.addEventListener("disconnect", () => { if (desk.rfb === rfb && desk.control) { setPill($("#desk-state"), "Disconnected", "bad"); $("#reconnect").hidden = false; } });
+  rfb.addEventListener("clipboard", (e) => { $("#clip-text").value = e.detail.text; });
+}
+$("#takeover").onclick = async () => {
+  if (desk.control) return;
+  $("#takeover").disabled = true; wsError("");
+  const id = crypto.randomUUID().replace(/-/g, "");
+  try {
+    const r = await cloud(inst("/computer/handoff"), { method: "POST", body: JSON.stringify({ action: "start", minutes: 15, handoffId: id, botId: "main" }) });
+    if (r.ok !== true || r.handoff !== true) throw new Error(r.error || "Takeover could not be confirmed");
+    stopLive();
+    desk.control = { id, expiresAt: Number(r.expiresAt) > 0 ? Number(r.expiresAt) : Date.now() + 15 * 60_000 };
+    $("#return-control").hidden = false; $("#takeover").hidden = true; $("#clip").hidden = false;
+    setPill($("#desk-state"), "Connecting…", "warn");
+    desk.timer = setInterval(() => {
+      const left = Math.max(0, desk.control.expiresAt - Date.now());
+      $("#desk-timer").textContent = `Control for ${Math.floor(left / 60000)}:${String(Math.floor(left / 1000) % 60).padStart(2, "0")} more`;
+      if (!left) endControl({ expired: true });
+    }, 1000);
+    desk.clipSeen = null; desk.clipTimer = setInterval(pullClipboard, 1500); pullClipboard();
+    await connectVnc();
+  } catch (err) { wsError(err.message); if (!desk.control) $("#takeover").disabled = false; }
+  finally { $("#takeover").disabled = false; }
+};
+$("#reconnect").onclick = () => connectVnc().catch((err) => wsError(err.message));
+async function endControl({ silent = false, expired = false } = {}) {
+  const control = desk.control; if (!control) return;
+  desk.control = null; clearInterval(desk.timer); clearInterval(desk.clipTimer); desk.rfb?.disconnect(); desk.rfb = null;
+  $("#vnc").replaceChildren(); $("#vnc").hidden = true; $("#desk-timer").textContent = "";
+  $("#return-control").hidden = true; $("#reconnect").hidden = true; $("#takeover").hidden = false; $("#clip").hidden = true;
+  if (state.ws) {
+    try { await fetch(CLOUD + inst("/computer/handoff"), { method: "POST", keepalive: true, headers: { "content-type": "application/json", authorization: "Bearer " + state.token }, body: JSON.stringify({ action: "stop", handoffId: control.id, botId: "main" }) }); }
+    catch (err) { if (!silent) wsError(err.message); }
+  }
+  if (!silent) { setPill($("#desk-state"), expired ? "Control expired · returned to the agent" : "Control returned to the agent", "good"); if (state.tab === "desktop") startLive(); }
+}
+$("#return-control").onclick = () => endControl();
+addEventListener("pagehide", () => endControl({ silent: true }));
+// Copies made on the desktop: read through the host (the VNC server does not forward them).
+async function pullClipboard() {
+  if (!desk.control || !state.ws) return;
+  try {
+    const { text } = await host("/v1/computer/clipboard");
+    if (typeof text !== "string" || text === desk.clipSeen) return;
+    desk.clipSeen = text;
+    if (document.activeElement !== $("#clip-text")) $("#clip-text").value = text;
+  } catch { /* the clipboard is a convenience */ }
+}
+$("#clip-send").onclick = async () => {
+  const text = $("#clip-text").value, btn = $("#clip-send");
+  try {
+    await host("/v1/computer/clipboard", { method: "POST", body: JSON.stringify({ text }) });
+    desk.clipSeen = text; btn.textContent = "Sent ✓";
+  } catch (err) { desk.rfb?.clipboardPasteFrom(text); btn.textContent = "Sent"; }
+  setTimeout(() => { btn.textContent = "Send to desktop"; }, 1500);
+};
+$("#clip-copy").onclick = () => navigator.clipboard?.writeText($("#clip-text").value);
+$("#fullscreen").onclick = () => { const s = $("#stage"); document.fullscreenElement ? document.exitFullscreen() : s.requestFullscreen?.(); };
+
+// ---------- preview ----------
+let previewUrl = "";
+async function refreshPorts() {
+  try {
+    const { ports = [] } = await host("/v1/ports");
+    const chips = $("#ports"); chips.replaceChildren();
+    for (const p of ports) {
+      const b = document.createElement("button"); b.type = "button"; b.className = "chip" + (String(p) === $("#port").value ? " on" : ""); b.textContent = ":" + p;
+      b.onclick = () => { $("#port").value = p; $("#preview-form").requestSubmit(); };
+      chips.append(b);
+    }
+    if (!ports.length) chips.innerHTML = `<span class="muted">No app is listening yet. Ask the agent to start one.</span>`;
+  } catch { /* chips are a convenience */ }
+}
+$("#preview-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const port = Number($("#port").value);
+  const note = $("#preview-note");
+  if (!Number.isInteger(port) || port < 1 || port > 65535) { note.hidden = false; note.textContent = "Enter a port between 1 and 65535."; return; }
+  try {
+    const check = await fetch(`${state.ws.host}/v1/preview?port=${port}`, { headers: { authorization: "Bearer " + state.ws.session } }).then((r) => r.json());
+    const { host: url } = await cloud(inst(`/preview?port=${port}`));
+    previewUrl = !url ? "" : /^https?:\/\//i.test(url) ? url : "https://" + url;
+    note.hidden = !!check.listening; note.textContent = check.listening ? "" : `Nothing is listening on port ${port} yet. Start your app in the terminal or ask the agent, then Reload.`;
+    $("#preview-frame").src = previewUrl;
+    refreshPorts();
+  } catch (err) { note.hidden = false; note.textContent = err.message; }
+};
+$("#preview-reload").onclick = () => { if (previewUrl) $("#preview-frame").src = previewUrl + (previewUrl.includes("?") ? "&" : "?") + "_r=" + Date.now(); };
+$("#preview-open").onclick = () => { if (previewUrl) open(previewUrl, "_blank", "noopener"); };
+
+// ---------- terminal ----------
+const term = { xterm: null, fit: null, socket: null, retry: 0, timer: null, wanted: false };
+function terminalId() {
+  const key = "vb.term." + state.ws.id;
+  let id = sessionStorage.getItem(key);
+  if (!id) { id = crypto.randomUUID().replace(/-/g, ""); sessionStorage.setItem(key, id); }
+  return id;
+}
+async function openTerminal() {
+  if (!term.xterm) {
+    const [{ Terminal }, { FitAddon }] = await Promise.all([import("https://esm.sh/@xterm/xterm@5.5.0"), import("https://esm.sh/@xterm/addon-fit@0.10.0")]);
+    term.xterm = new Terminal({ cursorBlink: true, fontSize: 13, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", theme: { background: "#07090c", foreground: "#e7ecf1", cursor: "#3d8bfd", selectionBackground: "#264f78" }, scrollback: 5000 });
+    term.fit = new FitAddon(); term.xterm.loadAddon(term.fit); term.xterm.open($("#term"));
+    term.xterm.onData((d) => { if (term.socket?.readyState === 1) term.socket.send(d); });
+    term.xterm.onResize(({ cols, rows }) => { if (term.socket?.readyState === 1) term.socket.send(JSON.stringify({ type: "resize", cols, rows })); });
+    new ResizeObserver(() => { if (!$("#terminal").hidden) term.fit.fit(); }).observe($("#term"));
+  }
+  term.wanted = true;
+  requestAnimationFrame(() => term.fit.fit());
+  if (!term.socket || term.socket.readyState > 1) connectTerminal();
+  term.xterm.focus();
 }
 function connectTerminal() {
-  const host = new URL(state.sandbox.host);
-  host.protocol = host.protocol === "https:" ? "wss:" : "ws:";
-  host.pathname = "/v1/terminal";
-  host.search = "token=" + encodeURIComponent(state.sandbox.session);
-  const screen = document.querySelector("#screen");
-  screen.textContent = "";
-  state.socket?.close();
-  const socket = new WebSocket(host);
-  state.socket = socket;
-  // The host streams PTY bytes as binary frames; decode them as a stream so
-  // characters split across frames still render.
-  socket.binaryType = "arraybuffer";
+  clearTimeout(term.timer);
+  if (!state.ws?.session) return;
+  const url = new URL(state.ws.host); url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = "/v1/terminal"; url.search = `token=${enc(state.ws.session)}&session=${enc(terminalId())}`;
+  term.socket?.close();
+  const socket = new WebSocket(url); socket.binaryType = "arraybuffer"; term.socket = socket;
   const decoder = new TextDecoder();
-  socket.onmessage = (event) => {
-    screen.textContent += typeof event.data === "string" ? event.data : decoder.decode(event.data, { stream: true });
-  };
-  socket.onerror = () => { screen.textContent += "\nTerminal connection failed"; };
-  document.querySelector("#shell").onsubmit = (event) => {
-    event.preventDefault();
-    const command = document.querySelector("#command");
-    socket.send(command.value + "\n");
-    command.value = "";
-  };
-}
-document.querySelectorAll("[data-tab]").forEach((button) => {
-  button.onclick = () => {
-    for (const name of ["chat", "terminal", "preview", "desktop", "settings"]) {
-      document.querySelector("#" + name).hidden = name !== button.dataset.tab;
+  setPill($("#term-state"), "Connecting…", "warn");
+  socket.onmessage = (e) => {
+    if (typeof e.data === "string") {
+      const msg = JSON.parse(e.data);
+      if (msg.type === "attached") {
+        term.retry = 0; setPill($("#term-state"), msg.resumed ? "Connected · resumed" : "Connected", "good");
+        if (!msg.resumed) term.xterm.clear(); else term.xterm.reset();
+        socket.send(JSON.stringify({ type: "resize", cols: term.xterm.cols, rows: term.xterm.rows }));
+      } else if (msg.type === "exit") { setPill($("#term-state"), "Shell exited", "warn"); sessionStorage.removeItem("vb.term." + state.ws.id); }
+      return;
     }
+    term.xterm.write(new Uint8Array(e.data));
   };
-});
-document.querySelector("#preview-form").onsubmit = async (event) => {
-  event.preventDefault();
-  try {
-    const port = document.querySelector("#port").value;
-    const body = await cloud(`/api/instances/${encodeURIComponent(state.sandbox.id)}/preview?port=${encodeURIComponent(port)}`);
-    document.querySelector("#preview-frame").src = body.host || "";
-  } catch (e) { fail(e); }
-};
-async function loadSettings() {
-  const body = await cloud(`/api/instances/${encodeURIComponent(state.sandbox.id)}/sandbox-state`);
-  document.querySelector("#settings-body").textContent = JSON.stringify(body, null, 2);
-  const select = document.querySelector("#chat-agent");
-  const chosen = select.value;
-  select.replaceChildren();
-  for (const agent of body.agents || []) {
-    const option = document.createElement("option");
-    option.value = agent.id === "main" ? "" : agent.id;
-    option.textContent = agent.name || agent.id;
-    select.append(option);
-  }
-  select.value = chosen;
+  socket.onclose = (e) => {
+    if (term.socket !== socket) return;
+    if (e.reason === "opened on another screen") { setPill($("#term-state"), "Opened in another window", "warn"); return; }
+    setPill($("#term-state"), "Disconnected", "bad");
+    if (term.wanted && state.ws) { const wait = Math.min(15000, 500 * 2 ** term.retry++); term.timer = setTimeout(connectTerminal, wait); setPill($("#term-state"), `Reconnecting in ${Math.round(wait / 1000)}s`, "warn"); }
+  };
 }
-// Turns go straight to the sandbox host with this device's session.
-async function host(path, options = {}) {
-  const response = await fetch(state.sandbox.host + path, {
-    ...options,
-    headers: { accept: "application/json", "content-type": "application/json", authorization: "Bearer " + state.sandbox.session },
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.error || "Sandbox request failed (" + response.status + ")");
-  return body;
-}
-document.querySelector("#chat-form").onsubmit = async (event) => {
-  event.preventDefault();
-  const input = document.querySelector("#chat-prompt");
-  const send = document.querySelector("#chat-send");
-  const log = document.querySelector("#chat-log");
-  const prompt = input.value.trim();
-  if (!prompt || !state.sandbox) return;
-  if (log.dataset.started !== "1") { log.textContent = ""; log.dataset.started = "1"; }
-  log.textContent += "You: " + prompt + "\n";
-  input.value = "";
-  send.disabled = true;
-  try {
-    const agentId = document.querySelector("#chat-agent").value;
-    const reply = await host("/v1/turns", { method: "POST", body: JSON.stringify({ engine: "supercharge", prompt, ...(agentId ? { agentId } : {}) }) });
-    log.textContent += "Agent: " + (reply.output || "(no reply)") + "\n\n";
-  } catch (e) {
-    log.textContent += "Agent error: " + (e.message || String(e)) + "\n\n";
-  } finally {
-    send.disabled = false;
-    log.scrollTop = log.scrollHeight;
-  }
-};
-let handoffId = "";
-let rfb;
-document.querySelector("#takeover").onclick = async () => {
-  try {
-    handoffId = crypto.randomUUID().replace(/-/g, "");
-    const body = await cloud(`/api/instances/${encodeURIComponent(state.sandbox.id)}/computer/handoff`, {
-      method: "POST",
-      body: JSON.stringify({ action: "start", minutes: 10, handoffId, botId: "main" }),
-    });
-    if (body.ok !== true || body.handoff !== true) throw new Error(body.error || "Takeover could not be confirmed");
-    const ticket = await cloud(`/api/instances/${encodeURIComponent(state.sandbox.id)}/computer/vnc-ticket`, {
-      method: "POST",
-      body: JSON.stringify({ handoffId, botId: "main" }),
-    });
-    if (!ticket.wsUrl) throw new Error(ticket.error || "Desktop connection unavailable");
-    const view = document.querySelector("#vnc");
-    view.replaceChildren();
-    const { default: RFB } = await import("https://esm.sh/@novnc/novnc@1.5.0");
-    rfb?.disconnect();
-    rfb = new RFB(view, ticket.wsUrl, { shared: true });
-    rfb.scaleViewport = true;
-    error.textContent = "You have the desktop. The agent waits until you return control.";
-  } catch (e) { fail(e); }
-};
-document.querySelector("#return-control").onclick = async () => {
-  try {
-    if (!handoffId) throw new Error("Take over before returning control");
-    const body = await cloud(`/api/instances/${encodeURIComponent(state.sandbox.id)}/computer/handoff`, {
-      method: "POST",
-      body: JSON.stringify({ action: "stop", handoffId, botId: "main" }),
-    });
-    if (body.ok !== true || body.handoff !== false) throw new Error(body.error || "Return could not be confirmed");
-    rfb?.disconnect();
-    rfb = undefined;
-    document.querySelector("#vnc").replaceChildren();
-    error.textContent = "Control returned. The sandbox stays awake while you are connected.";
-  } catch (e) { fail(e); }
-};
-document.querySelector("#agent-form").onsubmit = async (event) => {
-  event.preventDefault();
-  try {
-    const name = document.querySelector("#agent-name").value.trim();
-    const id = name.toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 64);
-    await cloud(`/api/instances/${encodeURIComponent(state.sandbox.id)}/sandbox-state`, {
-      method: "PUT",
-      body: JSON.stringify({ agent: { id, name, engine: "supercharge" } }),
-    });
-    document.querySelector("#agent-name").value = "";
-    await loadSettings();
-  } catch (e) { fail(e); }
-};
+function closeTerminal() { term.wanted = false; clearTimeout(term.timer); const s = term.socket; term.socket = null; s?.close(); term.xterm?.reset(); }
+$("#term-reconnect").onclick = () => { term.retry = 0; term.wanted = true; connectTerminal(); };
+$("#term-new").onclick = () => { if (state.ws) sessionStorage.removeItem("vb.term." + state.ws.id); term.xterm?.reset(); term.retry = 0; term.wanted = true; connectTerminal(); };
+
+// ---------- start ----------
+if (state.token) loadList(); else show("login");
 </script>
 </body>
 </html>

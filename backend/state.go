@@ -145,3 +145,19 @@ func (s *diskState) putSettings(next settingsRecord) error {
 	s.settings = next
 	return s.save()
 }
+
+// deleteAgent removes a custom agent. The main agent always stays.
+func (s *diskState) deleteAgent(id string) (bool, error) {
+	if id == "main" {
+		return false, errors.New("the main agent cannot be removed")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.agents {
+		if s.agents[i].ID == id {
+			s.agents = append(s.agents[:i], s.agents[i+1:]...)
+			return true, s.save()
+		}
+	}
+	return false, nil
+}

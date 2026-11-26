@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -147,12 +148,76 @@ func TestTerminalEcho(t *testing.T) {
 	if err := conn.Write(ctx, websocket.MessageText, []byte("hello\n")); err != nil {
 		t.Fatal(err)
 	}
-	_, data, err := conn.Read(ctx)
-	if err != nil {
+	if out := readTerminal(t, ctx, conn, "hello"); !strings.Contains(out, "hello") {
+		t.Fatalf("echo %q", out)
+	}
+}
+
+// readTerminal collects PTY output (binary frames) until want appears.
+func readTerminal(t *testing.T, ctx context.Context, conn *websocket.Conn, want string) string {
+	t.Helper()
+	var out strings.Builder
+	for !strings.Contains(out.String(), want) {
+		kind, data, err := conn.Read(ctx)
+		if err != nil {
+			t.Fatalf("read: %v (have %q)", err, out.String())
+		}
+		if kind == websocket.MessageBinary {
+			out.Write(data)
+		}
+	}
+	return out.String()
+}
+
+func TestTerminalResumesAfterDisconnect(t *testing.T) {
+	dir := t.TempDir()
+	shell := filepath.Join(dir, "fake-shell")
+	script := "#!/bin/sh\nwhile IFS= read -r line; do printf 'got:%s\\n' \"$line\"; done\n"
+	if err := os.WriteFile(shell, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "hello") {
-		t.Fatalf("echo %q", data)
+	t.Setenv("VECTRABOT_SHELL", shell)
+	root := filepath.Join(dir, "workspace")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(newServer(testTokens(), root))
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	url := strings.Replace(srv.URL, "http", "ws", 1) + "/v1/terminal?token=secret&session=resume-test-0123456789"
+	dial := func() (*websocket.Conn, map[string]any) {
+		conn, _, err := websocket.Dial(ctx, url, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		kind, data, err := conn.Read(ctx)
+		var hello map[string]any
+		if err != nil || kind != websocket.MessageText || json.Unmarshal(data, &hello) != nil {
+			t.Fatalf("no attach message: %v %q", err, data)
+		}
+		return conn, hello
+	}
+	first, hello := dial()
+	if hello["resumed"] != false {
+		t.Fatalf("first attach %v", hello)
+	}
+	_ = first.Write(ctx, websocket.MessageText, []byte("one\n"))
+	readTerminal(t, ctx, first, "got:one")
+	first.Close(websocket.StatusNormalClosure, "")
+	time.Sleep(100 * time.Millisecond)
+
+	second, hello := dial()
+	defer second.Close(websocket.StatusNormalClosure, "")
+	if hello["resumed"] != true {
+		t.Fatalf("second attach %v", hello)
+	}
+	readTerminal(t, ctx, second, "got:one") // replayed scrollback
+	_ = second.Write(ctx, websocket.MessageText, []byte("two\n"))
+	readTerminal(t, ctx, second, "got:two")
+
+	if _, _, err := websocket.Dial(ctx, strings.Replace(url, "resume-test-0123456789", "bad", 1), nil); err == nil {
+		t.Fatal("short session id accepted")
 	}
 }
 
