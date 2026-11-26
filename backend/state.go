@@ -117,6 +117,17 @@ func (s *diskState) putAgent(agent agentRecord) error {
 	return s.save()
 }
 
+func (s *diskState) agent(id string) (agentRecord, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, agent := range s.agents {
+		if agent.ID == id {
+			return agent, true
+		}
+	}
+	return agentRecord{}, false
+}
+
 func (s *diskState) readSettings() settingsRecord {
 	s.mu.Lock()
 	defer s.mu.Unlock()

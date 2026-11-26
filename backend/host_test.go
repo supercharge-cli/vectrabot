@@ -25,7 +25,7 @@ func TestAuthPathAndEngine(t *testing.T) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(newServer("secret", root))
+	srv := httptest.NewServer(newServer(testTokens(), root))
 	defer srv.Close()
 
 	res, err := http.Get(srv.URL + "/health")
@@ -87,7 +87,7 @@ func TestAgentsAndSettings(t *testing.T) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(newServer("secret", root))
+	srv := httptest.NewServer(newServer(testTokens(), root))
 	defer srv.Close()
 	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/v1/agents", strings.NewReader(`{"id":"github","name":"GitHub","engine":"claude"}`))
 	req.Header.Set("Authorization", "Bearer secret")
@@ -133,7 +133,7 @@ func TestTerminalEcho(t *testing.T) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(newServer("secret", root))
+	srv := httptest.NewServer(newServer(testTokens(), root))
 	defer srv.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -168,7 +168,7 @@ func TestTurnTimeout(t *testing.T) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(newServer("secret", root))
+	srv := httptest.NewServer(newServer(testTokens(), root))
 	defer srv.Close()
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/turns", strings.NewReader(`{"engine":"supercharge","prompt":"hang"}`))
 	req.Header.Set("Authorization", "Bearer secret")
