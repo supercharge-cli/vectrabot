@@ -155,3 +155,33 @@ func TestTerminalEcho(t *testing.T) {
 		t.Fatalf("echo %q", data)
 	}
 }
+
+func TestTurnTimeout(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "supercharge")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("VECTRABOT_TURN_TIMEOUT", "200ms")
+	root := filepath.Join(dir, "workspace")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(newServer("secret", root))
+	defer srv.Close()
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/turns", strings.NewReader(`{"engine":"supercharge","prompt":"hang"}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	started := time.Now()
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusGatewayTimeout {
+		t.Fatalf("timeout status %d", res.StatusCode)
+	}
+	if time.Since(started) > 5*time.Second {
+		t.Fatalf("turn was not cut off: %s", time.Since(started))
+	}
+}

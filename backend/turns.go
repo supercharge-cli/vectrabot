@@ -1,11 +1,25 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"os/exec"
+	"time"
 )
+
+// turnTimeout bounds one Supercharge turn so a stuck CLI cannot hold the
+// request (and the sandbox) open forever.
+func turnTimeout() time.Duration {
+	if raw := os.Getenv("VECTRABOT_TURN_TIMEOUT"); raw != "" {
+		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+			return d
+		}
+	}
+	return 10 * time.Minute
+}
 
 type turnRequest struct {
 	Engine string `json:"engine"`
@@ -26,10 +40,20 @@ func serveTurn(root string, w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "prompt required"})
 		return
 	}
-	cmd := exec.Command("supercharge", "agent", "--prompt", body.Prompt)
+	ctx, cancel := context.WithTimeout(r.Context(), turnTimeout())
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "supercharge", "agent", "--prompt", body.Prompt)
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), "VECTRABOT_ENGINE=supercharge")
+	cmd.WaitDelay = 2 * time.Second
 	out, err := cmd.CombinedOutput()
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		writeJSON(w, http.StatusGatewayTimeout, map[string]string{
+			"error":  "supercharge turn timed out",
+			"detail": trimOutput(out),
+		})
+		return
+	}
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{
 			"error":  "supercharge did not run",
