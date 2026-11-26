@@ -1278,7 +1278,7 @@ async function vncTicket() {
 }
 let RFB;
 async function connectVnc() {
-  RFB ||= (await import("https://esm.sh/@novnc/novnc@1.5.0")).default;
+  RFB ||= (await import("./vendor/novnc/core/rfb.js")).default;
   desk.rfb?.disconnect();
   const view = $("#vnc"); view.replaceChildren(); view.hidden = false; $("#live").hidden = true; stagePlaceholder("");
   const rfb = new RFB(view, await vncTicket(), { shared: true, credentials: {} });
