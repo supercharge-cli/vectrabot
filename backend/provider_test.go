@@ -228,3 +228,23 @@ func TestCLISetupOwnsProviderUntilCloudSettingsChange(t *testing.T) {
 		t.Fatal("owner mark kept after the cloud settings changed")
 	}
 }
+
+func TestProviderSaveWaitsForInFlightCall(t *testing.T) {
+	p := &providerControl{}
+	p.inflight.Store(1)
+	p.restart()
+	p.mu.Lock()
+	waiting := p.restartWaiting
+	p.mu.Unlock()
+	if !waiting {
+		t.Fatal("save restarted the provider process while a call was in flight")
+	}
+	if p.inflight.Add(-1) == 0 {
+		p.finishRestart()
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.restartWaiting {
+		t.Fatal("restart stayed pending after the call finished")
+	}
+}

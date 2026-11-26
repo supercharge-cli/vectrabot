@@ -244,6 +244,10 @@ internal class BotsClient(
         }
         http.newCall(req.build()).execute().use { res ->
             if (res.code == 401 && !retried && reattach?.invoke() == true) return call(method, path, body, true)
+            if ((res.code == 502 || res.code == 503) && path.startsWith("/api/providers/") && !retried) {
+                Thread.sleep(400)
+                return call(method, path, body, true)
+            }
             val text = res.body?.string().orEmpty()
             val json = if (text.trimStart().startsWith("{")) JSONObject(text) else JSONObject()
             if (!res.isSuccessful) throw HostError(res.code, json.optString("error").ifBlank { "Workspace request failed (${res.code})" })

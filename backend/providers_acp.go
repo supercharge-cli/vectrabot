@@ -7,17 +7,20 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 // providerControl is a session-less ACP process for provider setup: the same
 // `_supercharge/setup/*` methods the CLI's own /setup uses.
 type providerControl struct {
-	hub  *botHub
-	mu   sync.Mutex
-	conn *acpConn
-	init json.RawMessage
-	used time.Time
+	hub            *botHub
+	mu             sync.Mutex
+	conn           *acpConn
+	init           json.RawMessage
+	used           time.Time
+	inflight       atomic.Int32
+	restartWaiting bool
 }
 
 type quietHandler struct{}
@@ -65,25 +68,63 @@ func (p *providerControl) connLocked(ctx context.Context) (*acpConn, error) {
 }
 
 func (p *providerControl) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
-	p.mu.Lock()
-	conn, err := p.connLocked(ctx)
-	p.mu.Unlock()
-	if err != nil {
-		return nil, err
+	p.inflight.Add(1)
+	defer func() {
+		if p.inflight.Add(-1) == 0 {
+			p.finishRestart()
+		}
+	}()
+	var last error
+	for attempt := 0; attempt < 2; attempt++ {
+		p.mu.Lock()
+		conn, err := p.connLocked(ctx)
+		p.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
+		var out json.RawMessage
+		err = conn.call(ctx, method, params, &out)
+		if err == nil {
+			return out, nil
+		}
+		last = err
+		p.mu.Lock()
+		if p.conn == conn {
+			p.conn.close()
+			p.conn = nil
+		}
+		p.mu.Unlock()
 	}
-	var out json.RawMessage
-	err = conn.call(ctx, method, params, &out)
-	return out, err
+	return nil, last
 }
 
 // restart drops the control process so the next call reads the new config.
+// A save must not close the process while another setup call is still using it.
 func (p *providerControl) restart() {
 	p.mu.Lock()
+	if p.inflight.Load() > 0 {
+		p.restartWaiting = true
+		p.mu.Unlock()
+		return
+	}
+	p.closeLocked()
+	p.mu.Unlock()
+}
+
+func (p *providerControl) finishRestart() {
+	p.mu.Lock()
+	if p.restartWaiting && p.inflight.Load() == 0 {
+		p.restartWaiting = false
+		p.closeLocked()
+	}
+	p.mu.Unlock()
+}
+
+func (p *providerControl) closeLocked() {
 	if p.conn != nil {
 		p.conn.close()
 		p.conn = nil
 	}
-	p.mu.Unlock()
 }
 
 var providerActions = map[string]string{
