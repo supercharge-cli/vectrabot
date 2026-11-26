@@ -128,7 +128,13 @@ function connectTerminal() {
   state.socket?.close();
   const socket = new WebSocket(host);
   state.socket = socket;
-  socket.onmessage = (event) => { screen.textContent += typeof event.data === "string" ? event.data : ""; };
+  // The host streams PTY bytes as binary frames; decode them as a stream so
+  // characters split across frames still render.
+  socket.binaryType = "arraybuffer";
+  const decoder = new TextDecoder();
+  socket.onmessage = (event) => {
+    screen.textContent += typeof event.data === "string" ? event.data : decoder.decode(event.data, { stream: true });
+  };
   socket.onerror = () => { screen.textContent += "\nTerminal connection failed"; };
   document.querySelector("#shell").onsubmit = (event) => {
     event.preventDefault();
