@@ -92,5 +92,9 @@ func newServer(tokens *tokenStore, root string) http.Handler {
 	// The viewer is a browser WebSocket: it proves itself with a one-use ticket
 	// minted by an authorized vnc-ticket call instead of a header.
 	mux.HandleFunc("GET /v1/computer/browser/vnc", desktop.serveVNC)
+	bots := newBotHub(root, openBotStore(root, state.listAgents()), newEventHub())
+	routines := openRoutines(root, bots)
+	go routines.schedule()
+	registerBotRoutes(guard, bots, routines, newProviderControl(bots))
 	return allowBrowsers(rejectHTML(mux))
 }

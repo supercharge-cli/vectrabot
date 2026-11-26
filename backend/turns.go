@@ -151,6 +151,7 @@ func serveTurn(root string, state *diskState, w http.ResponseWriter, r *http.Req
 	cmd.Env = append(childEnv(overlay), "VECTRABOT_ENGINE=supercharge")
 	cmd.Stdin = nil
 	cmd.WaitDelay = 2 * time.Second
+	before := snapshotTree(root)
 	out, err := cmd.Output()
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		writeJSON(w, http.StatusGatewayTimeout, map[string]string{"error": "supercharge turn timed out", "detail": trimOutput(out)})
@@ -180,6 +181,9 @@ func serveTurn(root string, state *diskState, w http.ResponseWriter, r *http.Req
 	payload := map[string]any{"engine": "supercharge", "output": trimOutput([]byte(text))}
 	if parsed {
 		payload["reply"] = reply
+	}
+	if changes := diffTree(before, snapshotTree(root)); changes != nil {
+		payload["changes"] = changes
 	}
 	writeJSON(w, http.StatusOK, payload)
 }

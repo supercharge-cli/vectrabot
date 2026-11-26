@@ -104,7 +104,8 @@ func authorized(r *http.Request, tokens *tokenStore) bool {
 		return true
 	}
 	// Browsers cannot set an Authorization header on a WebSocket.
-	if r.URL.Path == "/v1/terminal" {
+	// EventSource cannot set one either.
+	if r.URL.Path == "/v1/terminal" || r.URL.Path == "/api/events" {
 		return tokens.valid(r.URL.Query().Get("token"))
 	}
 	return false
@@ -118,8 +119,8 @@ func allowBrowsers(next http.Handler) http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/v1/") && r.Header.Get("Origin") != "" {
 			h := w.Header()
 			h.Set("Access-Control-Allow-Origin", "*")
-			h.Set("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS")
-			h.Set("Access-Control-Allow-Headers", "authorization, content-type, accept")
+			h.Set("Access-Control-Allow-Methods", "GET, PUT, POST, PATCH, DELETE, OPTIONS")
+			h.Set("Access-Control-Allow-Headers", "authorization, content-type, accept, last-event-id")
 			h.Set("Access-Control-Max-Age", "600")
 			h.Set("Access-Control-Expose-Headers", "X-Frame-Version, X-Frame-Size")
 			if r.Method == http.MethodOptions {
