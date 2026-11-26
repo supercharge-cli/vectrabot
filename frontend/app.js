@@ -19,6 +19,43 @@ const state = {
   routines: [], runs: [], models: [], query: "",
 };
 const icon = (name, cls = "") => `<svg class="i ${cls}"><use href="#i-${name}"/></svg>`;
+
+// Open http(s) URLs in the system browser when running inside the Tauri
+// desktop client. In a regular browser, fall back to window.open.
+const nativeOpen = window.open.bind(window);
+function isHttpUrl(value) {
+  try { const u = new URL(String(value || ""), location.href); return u.protocol === "http:" || u.protocol === "https:"; }
+  catch { return false; }
+}
+async function openExternal(url) {
+  const href = String(url || "").trim();
+  if (!isHttpUrl(href)) return null;
+  const absolute = new URL(href, location.href).href;
+  const openUrl = window.__TAURI__?.opener?.openUrl;
+  if (typeof openUrl === "function") {
+    await openUrl(absolute);
+    return true;
+  }
+  return nativeOpen(absolute, "_blank", "noopener,noreferrer");
+}
+if (window.__TAURI__) {
+  window.open = (url, target, features) => {
+    if (isHttpUrl(url)) { openExternal(url); return null; }
+    return nativeOpen(url, target, features);
+  };
+}
+document.addEventListener("click", (event) => {
+  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  const a = event.target?.closest?.("a[href]");
+  if (!a || a.hasAttribute("download")) return;
+  const href = a.getAttribute("href");
+  if (!href || href.startsWith("#") || href.startsWith("javascript:")) return;
+  if (!isHttpUrl(href)) return;
+  if (!window.__TAURI__ && a.target !== "_blank") return;
+  event.preventDefault();
+  openExternal(href);
+}, true);
+
 function h(tag, attrs = {}, ...kids) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -1045,7 +1082,10 @@ function selectProvider(id) {
         area.replaceChildren();
         if (out.userCode) area.append(h("div", { class: "code-box" }, h("span", {}, out.userCode), h("button", { class: "btn ghost sm", type: "button", onclick: () => navigator.clipboard?.writeText(out.userCode) }, "Copy")));
         const link = out.url || out.verificationUriComplete || out.verificationUri;
-        if (link) area.append(h("a", { class: "btn sm", href: link, target: "_blank", rel: "noreferrer noopener" }, h("span", { html: icon("external", "sm") }), "Open sign-in page"));
+        if (link) {
+          area.append(h("button", { class: "btn sm", type: "button", onclick: () => openExternal(link) }, h("span", { html: icon("external", "sm") }), "Open sign-in page"));
+          openExternal(link);
+        }
         const waiting = h("div", { class: "row muted", style: { fontSize: "13px" } }, h("span", { class: "spinner" }), "Waiting for you to finish signing in…");
         const cancel = h("button", { class: "btn sm ghost", type: "button", onclick: async () => { stopProvPoll(); await api("/api/providers/auth/cancel", "POST", { loginId: out.loginId }).catch(() => {}); selectProvider(p.id); } }, "Cancel");
         area.append(h("div", { class: "row" }, waiting, h("span", { class: "grow" }), cancel));
@@ -1205,7 +1245,7 @@ $("#preview-form").onsubmit = async (e) => {
   finally { btn?.classList.remove("loading"); }
 };
 $("#preview-reload").onclick = () => { if (previewUrl) $("#preview-frame").src = previewUrl + (previewUrl.includes("?") ? "&" : "?") + "_r=" + Date.now(); };
-$("#preview-open").onclick = () => { if (previewUrl) open(previewUrl, "_blank", "noopener"); };
+$("#preview-open").onclick = () => { if (previewUrl) openExternal(previewUrl); };
 
 // ---------- terminal ----------
 const term = { xterm: null, fit: null, socket: null, retry: 0, timer: null, wanted: false };
