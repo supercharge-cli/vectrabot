@@ -49,7 +49,8 @@ internal data class Bot(
 )
 
 internal data class ToolDiff(val path: String, val oldText: String, val newText: String)
-internal data class ToolCall(val id: String, val title: String, val kind: String, val status: String, val input: String, val output: String, val diffs: List<ToolDiff>)
+internal data class ChatImage(val id: String, val mime: String)
+internal data class ToolCall(val id: String, val title: String, val kind: String, val status: String, val input: String, val output: String, val diffs: List<ToolDiff>, val images: List<ChatImage> = emptyList())
 internal data class PermissionChoice(val id: String, val name: String, val kind: String)
 internal data class QuestionChoice(val label: String, val description: String)
 internal data class Question(val question: String, val header: String, val options: List<QuestionChoice>, val multiSelect: Boolean)
@@ -152,6 +153,7 @@ internal fun parseMessage(o: JSONObject): BotMessage {
         ToolCall(
             t.str("id"), t.str("title").ifBlank { t.str("name").ifBlank { "Tool" } }, t.str("kind"), t.str("status"), t.str("input"), t.str("output"),
             t.optJSONArray("diffs").mapObjects { d -> ToolDiff(d.str("path"), d.str("oldText"), d.str("newText")) },
+            t.optJSONArray("images").mapObjects { img -> ChatImage(img.str("id"), img.str("mime")) },
         )
     }
     val req = o.optJSONObject("request")?.let { r ->
@@ -329,6 +331,18 @@ internal class BotsClient(
 
     data class LibraryFile(val name: String, val size: Long)
     fun files(botId: String): List<LibraryFile> = call("GET", "/api/bots/${enc(botId)}/files").optJSONArray("files").mapObjects { f -> LibraryFile(f.str("name"), f.optLong("size")) }
+    data class WorkspaceEntry(val name: String, val path: String, val dir: Boolean, val size: Long)
+    fun workspace(path: String): List<WorkspaceEntry> {
+        val query = if (path.isBlank()) "" else "?path=" + enc(path)
+        return call("GET", "/v1/files$query").optJSONArray("entries").mapObjects { e -> WorkspaceEntry(e.str("name"), e.str("path"), e.optBoolean("dir"), e.optLong("size")) }
+    }
+    fun bytes(path: String): ByteArray {
+        val req = Request.Builder().url(host.trimEnd('/') + path).header("authorization", "Bearer $session").get().build()
+        http.newCall(req).execute().use { res ->
+            if (!res.isSuccessful) throw HostError(res.code, "Download failed (${res.code})")
+            return res.body?.bytes() ?: ByteArray(0)
+        }
+    }
 
     fun routines(): List<Routine> = call("GET", "/api/routines").optJSONArray("routines").mapObjects(::parseRoutine)
     fun createRoutine(name: String, prompt: String, botId: String, type: String, time: String, everyMinutes: Int): Routine {

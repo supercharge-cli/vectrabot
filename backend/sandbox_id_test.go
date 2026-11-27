@@ -21,6 +21,15 @@ func TestSandboxBriefUsesTheRealId(t *testing.T) {
 	}
 }
 
+func TestPublicizeLinks(t *testing.T) {
+	t.Setenv("E2B_SANDBOX_ID", "id77m6epjllieap5elze5")
+	t.Setenv("E2B_DOMAIN", "e2b.app")
+	got := publicizeLinks("open http://localhost:8080/app and 127.0.0.1:3000")
+	if !strings.Contains(got, "https://8080-id77m6epjllieap5elze5.e2b.app/app") || !strings.Contains(got, "https://3000-id77m6epjllieap5elze5.e2b.app") {
+		t.Fatal(got)
+	}
+}
+
 func TestWorkspaceFolderList(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "src"), 0o755); err != nil {

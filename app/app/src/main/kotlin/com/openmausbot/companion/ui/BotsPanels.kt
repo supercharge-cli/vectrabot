@@ -188,12 +188,17 @@ internal fun BotInfoPanel(state: BotsState, onBack: () -> Unit, onEdit: () -> Un
     var tab by remember { mutableStateOf(0) }
     var routines by remember { mutableStateOf(listOf<Routine>()) }
     var files by remember { mutableStateOf(listOf<BotsClient.LibraryFile>()) }
+    var folder by remember { mutableStateOf("") }
+    var workspace by remember { mutableStateOf(listOf<BotsClient.WorkspaceEntry>()) }
     var perm by remember(bot.id) { mutableStateOf(bot.settings.permissionMode) }
     var mode by remember(bot.id) { mutableStateOf(bot.settings.mode) }
     var model by remember(bot.id) { mutableStateOf(bot.settings.model) }
     LaunchedEffect(bot.id) {
         runCatching { routines = withContext(Dispatchers.IO) { state.client.routines() }.filter { it.botId == bot.id } }
         runCatching { files = withContext(Dispatchers.IO) { state.client.files(bot.id) } }
+    }
+    LaunchedEffect(bot.id, folder) {
+        runCatching { workspace = withContext(Dispatchers.IO) { state.client.workspace(folder) } }
     }
     val models = state.session.options.firstOrNull { it.id == "model" }?.choices.orEmpty()
     Column(Modifier.fillMaxSize().background(Vx.panel)) {
@@ -265,6 +270,29 @@ internal fun BotInfoPanel(state: BotsState, onBack: () -> Unit, onEdit: () -> Un
                     }
                 }
             } else {
+                val context = androidx.compose.ui.platform.LocalContext.current
+                SectionBox("Workspace", Icons.Default.Edit) {
+                    if (folder.isNotBlank()) Text("↑ ..", color = Vx.accent, fontSize = 13.sp, modifier = Modifier.clickable { folder = folder.substringBeforeLast('/', "") })
+                    if (workspace.isEmpty()) Text("This folder is empty.", color = Vx.text3, fontSize = 12.sp)
+                    workspace.forEach { entry ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(entry.name, color = Vx.text, fontSize = 13.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f).clickable { if (entry.dir) folder = entry.path }, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (entry.dir) Text("folder", color = Vx.text3, fontSize = 11.sp)
+                            else Text("Download", color = Vx.accent, fontSize = 12.sp, modifier = Modifier.clickable {
+                                scope.launch {
+                                    try {
+                                        val bytes = withContext(Dispatchers.IO) { state.client.bytes("/v1/files?path=" + java.net.URLEncoder.encode(entry.path, "UTF-8")) }
+                                        val dir = java.io.File(context.cacheDir, "file-previews").apply { mkdirs() }
+                                        val file = java.io.File(dir, entry.name.replace(Regex("[^A-Za-z0-9._-]"), "_"))
+                                        file.writeBytes(bytes)
+                                        val uri = androidx.core.content.FileProvider.getUriForFile(context, context.packageName + ".transcripts", file)
+                                        context.startActivity(android.content.Intent.createChooser(android.content.Intent(android.content.Intent.ACTION_SEND).setType("*/*").putExtra(android.content.Intent.EXTRA_STREAM, uri).addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION), "Share ${entry.name}"))
+                                    } catch (e: CancellationException) { throw e } catch (e: Exception) { onNotice(e.message ?: "Download failed") }
+                                }
+                            })
+                        }
+                    }
+                }
                 SectionBox("Files", Icons.Default.Edit) {
                     if (files.isEmpty()) Text("No files yet. Files you or the bot add to its library show here.", color = Vx.text3, fontSize = 12.sp)
                     files.forEach { f -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

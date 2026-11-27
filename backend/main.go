@@ -98,6 +98,7 @@ func newServer(tokens *tokenStore, root string) http.Handler {
 	// minted by an authorized vnc-ticket call instead of a header.
 	mux.HandleFunc("GET /v1/computer/browser/vnc", desktop.serveVNC)
 	bots := newBotHub(root, openBotStore(root, state.listAgents()), newEventHub())
+	guard("GET /v1/chat-images/{id}", bots.serveChatImage)
 	routines := openRoutines(root, bots)
 	go routines.schedule()
 	registerBotRoutes(guard, bots, routines, newProviderControl(bots))

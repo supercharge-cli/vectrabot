@@ -333,7 +333,7 @@ private fun WorkspaceView(
     fun act(block: suspend () -> Unit) = scope.launch { try { block() } catch (e: CancellationException) { throw e } catch (e: Exception) { toast = e.message ?: "Request failed" } }
 
     val faces = remember(bots) { BotFaces(bots.client) }
-    androidx.compose.runtime.CompositionLocalProvider(LocalBotFaces provides faces) {
+    androidx.compose.runtime.CompositionLocalProvider(LocalBotFaces provides faces, LocalPreviewHost provides sandbox.host) {
     Box(Modifier.fillMaxSize().background(Vx.bg)) {
         when (panel) {
             Panel.Home -> BotHome(bots, sandbox.name, email, onOpen = { openBot(it) }, onNewBot = { creating = true },
@@ -507,7 +507,14 @@ private fun DesktopTab(api: CloudApi, sandbox: OpenSandbox, client: CloudSandbox
 private fun desktopBundleClient(context: android.content.Context) = object : WebViewClient() {
     override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
         if (request.url.lastPathSegment != "rfb-bundle.js") return null
-        return WebResourceResponse("text/javascript", "utf-8", context.assets.open("novnc/rfb-bundle.js"))
+        return WebResourceResponse(
+            "text/javascript",
+            "utf-8",
+            200,
+            "OK",
+            mapOf("Access-Control-Allow-Origin" to "*"),
+            context.assets.open("novnc/rfb-bundle.js"),
+        )
     }
 }
 
@@ -518,6 +525,11 @@ private fun DesktopViewer(socket: String) {
             WebView(context).apply {
                 webViewClient = desktopBundleClient(context)
                 settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                settings.mediaPlaybackRequiresUserGesture = false
+                @Suppress("DEPRECATION")
+                settings.allowUniversalAccessFromFileURLs = true
+                android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                 tag = socket
                 loadDataWithBaseURL("https://desktop.vectrabot.invalid/", desktopViewerHtml(socket), "text/html", "utf-8", null)
             }

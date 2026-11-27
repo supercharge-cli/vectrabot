@@ -2,6 +2,7 @@ package com.openmausbot.companion.ui
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -56,6 +57,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -68,6 +70,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
@@ -125,7 +129,7 @@ internal fun BotChatPane(state: BotsState, onProviders: () -> Unit, onNotice: (S
             itemsIndexed(messages) { i, m ->
                 val prev = messages.getOrNull(i - 1)
                 val showLabel = !m.fromUser && (prev == null || prev.fromUser)
-                MessageView(m, bot, showLabel, last = i == messages.lastIndex,
+                MessageView(m, bot, showLabel, client, last = i == messages.lastIndex,
                     onRespond = { req, answer -> act { withContext(Dispatchers.IO) { client.respond(tid, req.id, answer) } } },
                     onRetry = { text -> act { withContext(Dispatchers.IO) { client.send(bot.id, tid, text) } } },
                     onProviders = onProviders,
@@ -165,7 +169,7 @@ private fun WorkingRow(queued: Int) {
 
 @Composable
 private fun MessageView(
-    m: BotMessage, bot: Bot, showLabel: Boolean, last: Boolean,
+    m: BotMessage, bot: Bot, showLabel: Boolean, client: BotsClient, last: Boolean,
     onRespond: (AgentRequest, JSONObject) -> Unit, onRetry: (String) -> Unit, onProviders: () -> Unit, lastUserText: String?,
 ) {
     if (m.fromUser) {
@@ -188,7 +192,7 @@ private fun MessageView(
                 SelectionContainer { MarkdownText(m.text) }
             }
             "thought" -> Collapsible("Thinking", Icons.Default.Info) { Text(m.text, color = Vx.text2, fontSize = 13.sp) }
-            "tool" -> m.tool?.let { ToolCardView(it) }
+            "tool" -> m.tool?.let { ToolCardView(it, client) }
             "todo" -> PlanStepsCard(m.entries)
             "changes" -> ChangesCard(m.changes)
             "request" -> m.request?.let { RequestCardView(it, onRespond) }
@@ -239,10 +243,26 @@ private fun toolIcon(kind: String): ImageVector = when (kind) {
 }
 
 @Composable
-internal fun ToolCardView(t: ToolCall) {
+private fun ChatImageView(client: BotsClient?, id: String) {
+    val bitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, id, client) {
+        if (client == null || id.isBlank()) return@produceState
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                val bytes = client.bytes("/v1/chat-images/" + java.net.URLEncoder.encode(id, "UTF-8"))
+                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+            }.getOrNull()
+        }
+    }
+    val shown = bitmap
+    if (shown != null) Image(shown, contentDescription = "Image from the bot", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxWidth().clip(Vx.small))
+    else Text("Image", color = Vx.text3, fontSize = 12.sp)
+}
+
+@Composable
+internal fun ToolCardView(t: ToolCall, client: BotsClient? = null) {
     val title = t.title.replace(Regex("/home/user/\\.supercharge/\\S*/([^/\\s]+)"), "$1").replace("/home/user/workspace/", "")
     val running = t.status == "pending" || t.status == "in_progress"
-    Collapsible(title, toolIcon(t.kind), initiallyOpen = t.diffs.isNotEmpty(), trailing = {
+    Collapsible(title, toolIcon(t.kind), initiallyOpen = t.diffs.isNotEmpty() || t.images.isNotEmpty(), trailing = {
         if (t.diffs.isNotEmpty()) Tag("${t.diffs.size} file" + if (t.diffs.size > 1) "s" else "")
         when {
             running -> CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp, color = Vx.text3)
@@ -250,6 +270,7 @@ internal fun ToolCardView(t: ToolCall) {
             else -> Icon(Icons.Default.Check, null, tint = Vx.ok, modifier = Modifier.size(14.dp))
         }
     }) {
+        t.images.forEach { image -> ChatImageView(client, image.id) }
         t.diffs.forEach { DiffView(it) }
         val out = if (t.output.isBlank()) "" else toolSummary(t.output)
         if (out.isNotBlank() && (t.diffs.isEmpty() || t.status == "failed")) Mono(out, if (t.status == "failed") Vx.bad else Vx.text2)

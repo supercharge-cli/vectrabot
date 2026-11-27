@@ -75,15 +75,21 @@ type toolDiff struct {
 }
 
 type toolCard struct {
-	ID        string     `json:"id"`
-	Name      string     `json:"name,omitempty"`
-	Title     string     `json:"title"`
-	Kind      string     `json:"kind,omitempty"`
-	Status    string     `json:"status"`
-	Input     string     `json:"input,omitempty"`
-	Output    string     `json:"output,omitempty"`
-	Locations []string   `json:"locations,omitempty"`
-	Diffs     []toolDiff `json:"diffs,omitempty"`
+	ID        string      `json:"id"`
+	Name      string      `json:"name,omitempty"`
+	Title     string      `json:"title"`
+	Kind      string      `json:"kind,omitempty"`
+	Status    string      `json:"status"`
+	Input     string      `json:"input,omitempty"`
+	Output    string      `json:"output,omitempty"`
+	Locations []string    `json:"locations,omitempty"`
+	Diffs     []toolDiff  `json:"diffs,omitempty"`
+	Images    []chatImage `json:"images,omitempty"`
+}
+
+type chatImage struct {
+	ID   string `json:"id"`
+	Mime string `json:"mime"`
 }
 
 type questionOption struct {

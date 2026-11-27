@@ -160,6 +160,20 @@ internal class DesktopFrame(val version: Long, val jpeg: ByteArray)
 internal fun agentIdFor(name: String): String =
     name.trim().lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-').take(64)
 
+private val localServerLink = Regex("""(?i)(?:https?://)?(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{2,5})(/[^\s)<]*)?""")
+
+/** Rewrites loopback server links into https://port-sandbox.domain using the workspace host. */
+internal fun publicizeLinks(text: String, host: String): String {
+    val match = Regex("""^https?://\d+-([A-Za-z0-9]+)\.([^/?#]+)""").find(host.trim()) ?: return text
+    val id = match.groupValues[1]
+    val domain = match.groupValues[2]
+    return localServerLink.replace(text) { found ->
+        val port = found.groupValues[1].toIntOrNull()
+        if (port == null || port !in 1..65535) found.value
+        else "https://$port-$id.$domain${found.groupValues.getOrElse(2) { "" }}"
+    }
+}
+
 /** Preview hosts may come without a scheme; the page is always served over https. */
 internal fun previewUrl(host: String): String {
     val trimmed = host.trim()

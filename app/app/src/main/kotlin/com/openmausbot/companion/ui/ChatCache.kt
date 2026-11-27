@@ -65,7 +65,8 @@ private fun messageJson(m: BotMessage): JSONObject {
         o.put("tool", JSONObject()
             .put("id", t.id).put("title", t.title).put("kind", t.kind).put("status", t.status)
             .put("input", clip(t.input, 500)).put("output", clip(t.output, 500))
-            .put("diffs", JSONArray().also { arr -> t.diffs.forEach { d -> arr.put(JSONObject().put("path", d.path)) } }))
+            .put("diffs", JSONArray().also { arr -> t.diffs.forEach { d -> arr.put(JSONObject().put("path", d.path)) } })
+            .put("images", JSONArray().also { arr -> t.images.forEach { img -> arr.put(JSONObject().put("id", img.id).put("mime", img.mime)) } }))
     }
     m.request?.let { r ->
         o.put("request", JSONObject()

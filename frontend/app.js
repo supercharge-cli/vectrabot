@@ -527,8 +527,21 @@ function inline(s) {
     .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer noopener">$1</a>')
     .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noreferrer noopener">$2</a>');
 }
+function sandboxFromHost(host) {
+  const m = String(host || "").match(/^https?:\/\/\d+-([a-z0-9]+)\.([^/?#]+)/i);
+  return m ? { id: m[1], domain: m[2] } : null;
+}
+function publicizeLinks(src) {
+  const box = sandboxFromHost(state.ws?.host);
+  if (!box) return String(src || "");
+  return String(src || "").replace(/(?:https?:\/\/)?(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{2,5})(\/[^\s)<]*)?/gi, (all, port, path) => {
+    const n = Number(port);
+    if (!Number.isInteger(n) || n < 1 || n > 65535) return all;
+    return `https://${n}-${box.id}.${box.domain}${path || ""}`;
+  });
+}
 function markdown(src, { streaming = false } = {}) {
-  const out = []; const parts = String(src || "").split(/^```/m);
+  const out = []; const parts = publicizeLinks(src).split(/^```/m);
   parts.forEach((part, i) => {
     if (i % 2) {
       const nl = part.indexOf("\n"); const lang = nl >= 0 ? part.slice(0, nl).trim() : ""; const code = nl >= 0 ? part.slice(nl + 1) : "";
@@ -691,9 +704,17 @@ function toolCard(t) {
   const out = toolOutput(t.output);
   // An edit's diff already shows what changed; only show its output on failure.
   if (out && (!t.diffs?.length || t.status === "failed")) body.append(h("div", {}, h("h4", {}, t.status === "failed" ? "Error" : "Output"), h("pre", {}, out)));
+  for (const image of t.images || []) {
+    if (!image?.id) continue;
+    const img = h("img", { alt: "Shared image", style: { maxWidth: "100%", borderRadius: "8px", marginTop: "8px" } });
+    fetch(`${state.ws.host}/v1/chat-images/${enc(image.id)}`, { headers: { authorization: "Bearer " + state.ws.session } })
+      .then((r) => r.ok ? r.blob() : null)
+      .then((blob) => { if (blob) img.src = URL.createObjectURL(blob); });
+    body.append(img);
+  }
   if (!body.childNodes.length) body.append(h("div", { class: "faint" }, running ? "Running…" : "No output."));
   // Edits open by default so the diff is visible without a click.
-  if (t.diffs?.length && !openTools.has("closed:" + t.id) && !card.classList.contains("open")) { card.classList.add("open"); body.hidden = false; }
+  if ((t.diffs?.length || t.images?.length) && !openTools.has("closed:" + t.id) && !card.classList.contains("open")) { card.classList.add("open"); body.hidden = false; }
   card.append(head, body); return card;
 }
 // Tool results are often JSON envelopes; prefer their human summary.
@@ -963,7 +984,31 @@ function renderComputer() {
     h("div", { class: "kv" }, h("span", {}, "Desktop"), h("b", {}, ctl ? "You have control" : "Agent in control")),
     h("div", { class: "row" }, h("button", { class: "btn sm grow", type: "button", onclick: () => selectTab("desktop") }, h("span", { html: icon("monitor", "sm") }), "Open desktop"), h("button", { class: "btn sm", type: "button", onclick: () => selectTab("terminal") }, h("span", { html: icon("terminal", "sm") }), "Terminal")));
 }
+let workspacePath = "";
+async function loadWorkspace(path = workspacePath) {
+  const list = $("#workspace-list"); if (!list || !state.ws?.session) return;
+  workspacePath = path || "";
+  try {
+    const data = await host("/v1/files" + (workspacePath ? "?path=" + enc(workspacePath) : ""));
+    const entries = data.entries || [];
+    list.replaceChildren();
+    if (workspacePath) list.append(h("button", { class: "li", type: "button", onclick: () => loadWorkspace(workspacePath.split("/").slice(0, -1).join("/")) }, h("span", { class: "t" }, "↑ ..")));
+    for (const entry of entries) {
+      const row = h("div", { class: "li" }, h("span", { class: "t", style: { fontFamily: "var(--mono)", fontSize: "12px" } }, entry.name), h("span", { class: "s" }, entry.dir ? "folder" : fmtSize(entry.size || 0)));
+      if (entry.dir) row.append(h("button", { class: "btn ghost sm", type: "button", onclick: () => loadWorkspace(entry.path) }, "Open"));
+      else row.append(h("button", { class: "btn ghost icon sm", type: "button", title: "Download", onclick: () => downloadWorkspace(entry.path, entry.name), html: icon("download", "sm") }));
+      list.append(row);
+    }
+    if (!entries.length) list.append(h("div", { class: "empty" }, "This folder is empty."));
+  } catch (err) { list.replaceChildren(h("div", { class: "empty" }, err.message || "Couldn't list files")); }
+}
+async function downloadWorkspace(path, name) {
+  const res = await fetch(`${state.ws.host}/v1/files?path=${enc(path)}`, { headers: { authorization: "Bearer " + state.ws.session } });
+  if (!res.ok) { wsError("Download failed"); return; }
+  const url = URL.createObjectURL(await res.blob()); const a = h("a", { href: url, download: name }); a.click(); setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
 async function loadFiles() {
+  loadWorkspace(workspacePath);
   const bot = currentBot(); const list = $("#file-list"); if (!bot || !state.ws?.session) return;
   try {
     const { files = [] } = await api(`/api/bots/${enc(bot.id)}/files`);

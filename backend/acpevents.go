@@ -2,7 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -13,12 +19,14 @@ type botEvents struct {
 }
 
 type contentBlock struct {
-	Type    string          `json:"type"`
-	Text    string          `json:"text"`
-	Path    string          `json:"path"`
-	OldText *string         `json:"oldText"`
-	NewText string          `json:"newText"`
-	Content json.RawMessage `json:"content"`
+	Type     string          `json:"type"`
+	Text     string          `json:"text"`
+	Path     string          `json:"path"`
+	OldText  *string         `json:"oldText"`
+	NewText  string          `json:"newText"`
+	Content  json.RawMessage `json:"content"`
+	Data     string          `json:"data"`
+	MimeType string          `json:"mimeType"`
 }
 
 type sessionUpdate struct {
@@ -90,6 +98,68 @@ func (e *botEvents) notify(method string, params json.RawMessage) {
 	}
 }
 
+func (h *botHub) saveChatImage(data, mime string) (chatImage, bool) {
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(data))
+	if err != nil || len(raw) == 0 || len(raw) > 6<<20 {
+		return chatImage{}, false
+	}
+	ext := ""
+	switch mime {
+	case "image/png":
+		ext = "png"
+	case "image/jpeg":
+		ext = "jpg"
+	case "image/webp":
+		ext = "webp"
+	case "image/gif":
+		ext = "gif"
+	default:
+		return chatImage{}, false
+	}
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return chatImage{}, false
+	}
+	id := hex.EncodeToString(buf)
+	dir := filepath.Join(h.root, ".vectrabot", "chat-images")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return chatImage{}, false
+	}
+	if err := os.WriteFile(filepath.Join(dir, id+"."+ext), raw, 0o600); err != nil {
+		return chatImage{}, false
+	}
+	return chatImage{ID: id, Mime: mime}, true
+}
+
+func (h *botHub) serveChatImage(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if len(id) != 16 || strings.Trim(id, "0123456789abcdef") != "" {
+		notFound(w, "image")
+		return
+	}
+	dir := filepath.Join(h.root, ".vectrabot", "chat-images")
+	matches, _ := filepath.Glob(filepath.Join(dir, id+".*"))
+	if len(matches) != 1 {
+		notFound(w, "image")
+		return
+	}
+	switch filepath.Ext(matches[0]) {
+	case ".png":
+		w.Header().Set("Content-Type", "image/png")
+	case ".jpg":
+		w.Header().Set("Content-Type", "image/jpeg")
+	case ".webp":
+		w.Header().Set("Content-Type", "image/webp")
+	case ".gif":
+		w.Header().Set("Content-Type", "image/gif")
+	default:
+		notFound(w, "image")
+		return
+	}
+	w.Header().Set("Cache-Control", "private, max-age=86400")
+	http.ServeFile(w, r, matches[0])
+}
+
 func textOf(raw json.RawMessage) string {
 	var block contentBlock
 	if json.Unmarshal(raw, &block) == nil && block.Type == "text" {
@@ -130,11 +200,11 @@ func (h *botHub) applyUpdateLocked(tid string, live *threadLive, u sessionUpdate
 			slot, kind = &live.thoughtMsg, "thought"
 		}
 		if m := h.findLocked(tid, *slot); m != nil {
-			m.Text += text
+			m.Text = publicizeLinks(m.Text + text)
 			h.touchLocked(tid, live, m.ID)
 			return false
 		}
-		m := &message{Role: "bot", Kind: kind, Text: text}
+		m := &message{Role: "bot", Kind: kind, Text: publicizeLinks(text)}
 		h.appendLocked(tid, m)
 		*slot = m.ID
 		if kind == "text" {
@@ -192,18 +262,28 @@ func (h *botHub) applyUpdateLocked(tid string, live *threadLive, u sessionUpdate
 						if t := textOf(b.Content); t != "" {
 							out = append(out, t)
 						}
+						var inner contentBlock
+						if json.Unmarshal(b.Content, &inner) == nil && inner.Type == "image" {
+							if img, ok := h.saveChatImage(inner.Data, inner.MimeType); ok {
+								card.Images = append(card.Images, img)
+							}
+						}
+					case "image":
+						if img, ok := h.saveChatImage(b.Data, b.MimeType); ok {
+							card.Images = append(card.Images, img)
+						}
 					case "terminal":
 						out = append(out, "(terminal output)")
 					}
 				}
 				if len(out) > 0 {
-					card.Output = clip(strings.Join(out, "\n"), 20000)
+					card.Output = publicizeLinks(clip(strings.Join(out, "\n"), 20000))
 				}
 			}
 		}
 		if card.Output == "" && (card.Status == "completed" || card.Status == "failed") {
 			if o := compactJSON(u.RawOutput, 20000); o != "" && o != "{}" {
-				card.Output = o
+				card.Output = publicizeLinks(o)
 			}
 		}
 		if card.Status == "completed" || card.Status == "failed" {

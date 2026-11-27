@@ -53,9 +53,28 @@ func serveReadFile(root string, w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "file not found"})
 		return
 	}
-	w.Header().Set("Content-Type", "application/octet-stream")
+	name = filepath.Base(full)
+	w.Header().Set("Content-Type", mimeForName(name))
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+name+"\"")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
+}
+
+func mimeForName(name string) string {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	case ".txt", ".md", ".json", ".log":
+		return "text/plain; charset=utf-8"
+	default:
+		return "application/octet-stream"
+	}
 }
 
 func serveWriteFile(root string, w http.ResponseWriter, r *http.Request) {

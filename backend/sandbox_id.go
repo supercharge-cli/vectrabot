@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 )
 
@@ -77,11 +78,38 @@ func sandboxBrief() string {
 	} else {
 		b.WriteString("If asked which sandbox or VM this is, answer with this sandbox id. Do not invent one.\n")
 		fmt.Fprintf(&b, "A server on port N is reachable by the person at https://N-%s.%s\n", id, domain)
-		b.WriteString("Never send localhost.\n")
+		b.WriteString("When you share a server, write that full link. Never send localhost, 127.0.0.1, or a bare port for the person to type into the preview.\n")
 		fmt.Fprintf(&b, "Examples: %s and %s\n", previewURL(3000, id, domain), previewURL(5173, id, domain))
 	}
 	b.WriteString("The desktop in this VM is controlled with desktop_observe and desktop_action. Observe before acting, then use that frame's coordinates.\n")
 	b.WriteString("The person cannot open a disk path. Give a preview link, not /home/user/workspace.\n")
 	b.WriteString("</sandbox>")
 	return b.String()
+}
+
+var localServerLink = regexp.MustCompile(`(?i)(?:https?://)?(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{2,5})(/[^\s)\]>'"]*)?`)
+
+// publicizeLinks rewrites a loopback server address into the sandbox's public URL.
+func publicizeLinks(text string) string {
+	id := sandboxID()
+	if id == "" {
+		return text
+	}
+	domain := previewDomain()
+	return localServerLink.ReplaceAllStringFunc(text, func(match string) string {
+		parts := localServerLink.FindStringSubmatch(match)
+		if len(parts) < 2 {
+			return match
+		}
+		port := 0
+		fmt.Sscanf(parts[1], "%d", &port)
+		if port < 1 || port > 65535 {
+			return match
+		}
+		path := ""
+		if len(parts) > 2 {
+			path = parts[2]
+		}
+		return previewURL(port, id, domain) + path
+	})
 }

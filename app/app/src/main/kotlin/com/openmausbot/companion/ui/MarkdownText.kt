@@ -71,7 +71,9 @@ fun MarkdownText(
      */
     openLink: ((String) -> Unit)? = null,
 ) {
-    val blocks = Markdown.blocks(source)
+    val host = LocalPreviewHost.current
+    val shown = androidx.compose.runtime.remember(source, host) { publicizeLinks(source, host) }
+    val blocks = Markdown.blocks(shown)
     CompositionLocalProvider(LocalLinkOpener provides openLink) {
         Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
             blocks.forEachIndexed { index, block ->
@@ -83,6 +85,9 @@ fun MarkdownText(
 
 /** The opener [MarkdownText] was given, reachable from every block's inline run. */
 private val LocalLinkOpener = compositionLocalOf<((String) -> Unit)?> { null }
+
+/** Workspace host, so chat links can use the sandbox's public URL. */
+internal val LocalPreviewHost = compositionLocalOf { "" }
 
 @Composable
 private fun MarkdownBlockView(block: MarkdownBlock, tail: Boolean) {
