@@ -50,7 +50,7 @@ func (p *providerControl) connLocked(ctx context.Context) (*acpConn, error) {
 	if p.conn != nil && p.conn.alive() {
 		return p.conn, nil
 	}
-	cmd, err := p.hub.agentCommand()
+	cmd, err := p.hub.agentCommand("main")
 	if err != nil {
 		return nil, err
 	}

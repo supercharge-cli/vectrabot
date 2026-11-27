@@ -157,7 +157,7 @@ func serveTurn(root string, state *diskState, w http.ResponseWriter, r *http.Req
 	defer cancel()
 	cmd := exec.CommandContext(ctx, superchargeBinary(), turnArgs(root, body.Prompt, rules, model)...)
 	cmd.Dir = root
-	cmd.Env = append(childEnv(overlay), "VECTRABOT_ENGINE=supercharge")
+	cmd.Env = append(append(childEnv(overlay), "VECTRABOT_ENGINE=supercharge"), e2bAgentEnv(body.AgentID)...)
 	cmd.Stdin = nil
 	cmd.WaitDelay = 2 * time.Second
 	before := snapshotTree(root)

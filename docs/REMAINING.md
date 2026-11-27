@@ -4,6 +4,7 @@ Updated after the takeover viewer fix. Host `276aa28` is on GitHub. This viewer 
 
 ## Done locally, not pushed
 
+- The workspace host starts each bot as `supercharge-e2b` with `SUPERCHARGE_DESKTOP_PROTOCOL=1`, display `:99`, and the desktop sidecar on port 9224. That is the controller the CLI uses to see and drive the VM. A new template and a gateway host pin are required before production sandboxes pick it up.
 - Takeover no longer imports noVNC as a module. `frontend/vendor/novnc/rfb-bundle.js` is a classic script (`NovncRFB`). The phone page loads the same file from app assets. The old module import is what showed "Importing a module script failed" on PC and a blank screen on the phone.
 
 - `7297c10` loads xterm from `frontend/vendor/xterm` instead of esm.sh. The remote Inter stylesheet is removed so the desktop content policy does not block it. The font falls back to the system UI stack.

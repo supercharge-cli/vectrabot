@@ -128,7 +128,7 @@ func (h *botHub) runtimeBusyLocked(rt *botRuntime) bool {
 }
 
 // agentCommand starts the CLI in ACP mode with the saved provider applied.
-func (h *botHub) agentCommand() (*exec.Cmd, error) {
+func (h *botHub) agentCommand(botID string) (*exec.Cmd, error) {
 	var overlay []string
 	for _, file := range providerEnvFiles() {
 		overlay = append(overlay, readEnvFile(file)...)
@@ -138,9 +138,59 @@ func (h *botHub) agentCommand() (*exec.Cmd, error) {
 	}
 	cmd := exec.Command(superchargeBinary(), "agent", "stdio")
 	cmd.Dir = h.root
-	cmd.Env = append(childEnv(overlay), "VECTRABOT_ENGINE=supercharge")
+	cmd.Env = append(append(childEnv(overlay), "VECTRABOT_ENGINE=supercharge"), e2bAgentEnv(botID)...)
 	cmd.Stderr = nil
 	return cmd, nil
+}
+
+// e2bAgentEnv selects the E2B desktop agent and points it at the sandbox
+// desktop controller. Without this the CLI stays on the local toolset and
+// cannot click, type, or see the VM desktop.
+func e2bAgentEnv(botID string) []string {
+	owner := botID
+	if owner == "" {
+		owner = "main"
+	}
+	var cleaned strings.Builder
+	for _, r := range owner {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			cleaned.WriteRune(r)
+		}
+	}
+	owner = cleaned.String()
+	if owner == "" {
+		owner = "main"
+	}
+	if len(owner) > 128 {
+		owner = owner[:128]
+	}
+	display := strings.TrimSpace(os.Getenv("VECTRABOT_DISPLAY"))
+	if display == "" {
+		display = ":99"
+	}
+	runtime := strings.TrimSpace(os.Getenv("VECTRABOT_DESKTOP_RUNTIME"))
+	if runtime == "" {
+		runtime = "/tmp/supercharge-browser"
+	}
+	xauth := strings.TrimSpace(os.Getenv("VECTRABOT_XAUTHORITY"))
+	if xauth == "" {
+		xauth = runtime + "/Xauthority"
+	}
+	port := strings.TrimSpace(os.Getenv("SUPERAGENT_BROWSER_SIDECAR_PORT"))
+	if port == "" {
+		port = "9224"
+	}
+	return []string{
+		"SUPERCHARGE_RUNTIME_MODE=e2b",
+		"SUPERCHARGE_AGENT=supercharge-e2b",
+		"SUPERCHARGE_DESKTOP_PROTOCOL=1",
+		"SUPERCHARGE_DISABLE_AUTOUPDATER=1",
+		"DISPLAY=" + display,
+		"XAUTHORITY=" + xauth,
+		"DBUS_SESSION_BUS_ADDRESS=unix:path=" + runtime + "/bus",
+		"SUPERAGENT_BROWSER_SIDECAR_PORT=" + port,
+		"VECTRA_BROWSER_OWNER=" + owner,
+	}
 }
 
 // runtimeFor returns the bot's running process, starting it when needed.
@@ -164,7 +214,7 @@ func (h *botHub) runtimeFor(ctx context.Context, botID string) (*botRuntime, err
 	if old != nil {
 		old.close()
 	}
-	cmd, err := h.agentCommand()
+	cmd, err := h.agentCommand(botID)
 	if err != nil {
 		return nil, err
 	}

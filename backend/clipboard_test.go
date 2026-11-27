@@ -8,6 +8,30 @@ import (
 	"testing"
 )
 
+func TestE2BAgentEnvPointsAtDesktopController(t *testing.T) {
+	t.Setenv("VECTRABOT_DISPLAY", ":99")
+	t.Setenv("VECTRABOT_DESKTOP_RUNTIME", "/tmp/supercharge-browser")
+	t.Setenv("SUPERAGENT_BROWSER_SIDECAR_PORT", "9224")
+	got := strings.Join(e2bAgentEnv("main"), "\n")
+	for _, want := range []string{
+		"SUPERCHARGE_RUNTIME_MODE=e2b",
+		"SUPERCHARGE_AGENT=supercharge-e2b",
+		"SUPERCHARGE_DESKTOP_PROTOCOL=1",
+		"DISPLAY=:99",
+		"SUPERAGENT_BROWSER_SIDECAR_PORT=9224",
+		"VECTRA_BROWSER_OWNER=main",
+		"XAUTHORITY=/tmp/supercharge-browser/Xauthority",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %s in %s", want, got)
+		}
+	}
+	env := e2bAgentEnv("bad bot!")
+	if env[len(env)-1] != "VECTRA_BROWSER_OWNER=badbot" {
+		t.Fatal(env[len(env)-1])
+	}
+}
+
 func TestClipboardReadsTheDesktopSelection(t *testing.T) {
 	bin := t.TempDir()
 	script := "#!/bin/sh\n[ \"$DISPLAY\" = :7 ] || exit 3\n[ \"$*\" = \"-o -selection clipboard\" ] || exit 4\nprintf 'copied on desktop'\n"
