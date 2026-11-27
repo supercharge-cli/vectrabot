@@ -138,11 +138,16 @@ internal fun desktopViewerHtml(wsUrl: String): String {
     return """
         <!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
         <style>html,body,#screen{margin:0;height:100%;background:#000;color:#ccc;font:14px sans-serif}</style></head>
-        <body><div id="screen"></div><script type="module">
-        const { default: RFB } = await import("https://esm.sh/@novnc/novnc@1.5.0");
-        const rfb = new RFB(document.getElementById("screen"), $target, { shared: true });
-        rfb.scaleViewport = true;
-        rfb.addEventListener("disconnect", () => { document.body.textContent = "Desktop disconnected"; });
+        <body><div id="screen"></div>
+        <script src="https://desktop.vectrabot.invalid/novnc/rfb-bundle.js"></script>
+        <script>
+        const RFB = (window.NovncRFB && (window.NovncRFB.default || window.NovncRFB));
+        if (typeof RFB !== "function") { document.body.textContent = "Desktop viewer failed to load"; }
+        else {
+          const rfb = new RFB(document.getElementById("screen"), $target, { shared: true });
+          rfb.scaleViewport = true;
+          rfb.addEventListener("disconnect", () => { document.body.textContent = "Desktop disconnected"; });
+        }
         </script></body></html>
     """.trimIndent()
 }

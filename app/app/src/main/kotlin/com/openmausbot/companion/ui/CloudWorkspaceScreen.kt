@@ -5,6 +5,8 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
@@ -477,12 +479,19 @@ private fun DesktopTab(api: CloudApi, sandbox: OpenSandbox, client: CloudSandbox
     }
 }
 
+private fun desktopBundleClient(context: android.content.Context) = object : WebViewClient() {
+    override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+        if (request.url.lastPathSegment != "rfb-bundle.js") return null
+        return WebResourceResponse("text/javascript", "utf-8", context.assets.open("novnc/rfb-bundle.js"))
+    }
+}
+
 @Composable
 private fun DesktopViewer(socket: String) {
     AndroidView(
         factory = { context ->
             WebView(context).apply {
-                webViewClient = WebViewClient()
+                webViewClient = desktopBundleClient(context)
                 settings.javaScriptEnabled = true
                 tag = socket
                 loadDataWithBaseURL("https://desktop.vectrabot.invalid/", desktopViewerHtml(socket), "text/html", "utf-8", null)

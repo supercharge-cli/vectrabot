@@ -64,6 +64,8 @@ class CloudSandboxTest {
     @Test fun viewerPageQuotesTheSocketUrl() {
         val html = desktopViewerHtml("wss://h/v1?ticket=a\"</script><script>alert(1)")
         assertTrue(html.contains("new RFB("))
+        assertTrue(html.contains("rfb-bundle.js"))
+        assertFalse(html.contains("esm.sh"))
         assertFalse(html.contains("</script><script>alert"))
     }
 

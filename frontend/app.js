@@ -1283,7 +1283,8 @@ async function vncTicket() {
 }
 let RFB;
 async function connectVnc() {
-  RFB ||= (await import("./vendor/novnc/core/rfb.js")).default;
+  RFB ||= globalThis.NovncRFB?.default || globalThis.NovncRFB;
+  if (typeof RFB !== "function") throw new Error("Desktop viewer failed to load");
   desk.rfb?.disconnect();
   const view = $("#vnc"); view.replaceChildren(); view.hidden = false; $("#live").hidden = true; stagePlaceholder("");
   const rfb = new RFB(view, await vncTicket(), { shared: true, credentials: {} });

@@ -1,8 +1,10 @@
 # Vectrabot: what's left
 
-Updated after the local terminal and provider-save fixes. Nothing from this pass is pushed.
+Updated after the takeover viewer fix. Host `276aa28` is on GitHub. This viewer change is not pushed.
 
 ## Done locally, not pushed
+
+- Takeover no longer imports noVNC as a module. `frontend/vendor/novnc/rfb-bundle.js` is a classic script (`NovncRFB`). The phone page loads the same file from app assets. The old module import is what showed "Importing a module script failed" on PC and a blank screen on the phone.
 
 - `7297c10` loads xterm from `frontend/vendor/xterm` instead of esm.sh. The remote Inter stylesheet is removed so the desktop content policy does not block it. The font falls back to the system UI stack.
 - `e9534ae` keeps a model save from closing the provider process while another setup call is running. The phone and the PC retry `/api/providers/save` and `/api/providers/image/save` once after a 502 or 503.
@@ -11,8 +13,8 @@ Updated after the local terminal and provider-save fixes. Nothing from this pass
 
 ## Still to do
 
-1. **Push, then point the gateway at this host.** `apps/gateway/Dockerfile` still has `VECTRABOT_SHA=b8b7fdc7b7afa7e00daf76f711cc7b8471b8fe91`. The Docker build fetches that commit from GitHub, so set `VECTRABOT_SHA` to the vectrabot `main` commit only after that commit is pushed. Then redeploy the gateway on Coolify with "Redeploy (without cache)". Build pack stays Dockerfile, base dir `/apps/gateway`. Do not push or redeploy without approval.
-2. **Built desktop app is not verified.** Takeover (`b7e8f95`) and the new terminal have not been clicked through in an RPM. Build with `cd desktop && npm i && npx tauri build --bundles rpm`, sign in, open a workspace, take over, and check the canvas, mouse, keyboard, and terminal.
+1. **Gateway pin is `276aa28`.** Redeploy the gateway on Coolify with "Redeploy (without cache)" if that host is not the one running. Build pack stays Dockerfile, base dir `/apps/gateway`. The takeover viewer fix is client-only and does not need a new host SHA. Do not redeploy without approval.
+2. **Built desktop app is not verified.** The takeover viewer is a local classic script now. Rebuild the RPM, install it, sign in, take over, and check the canvas, mouse, keyboard, and terminal. The copy already installed still has the module-import error.
 3. **Packages exist, the live click-through does not.** RPM: `desktop/src-tauri/target/release/bundle/rpm/Vectrabot-1.0.2-1.x86_64.rpm`. Debug APK: `app/app/build/outputs/apk/debug/app-debug.apk`. Sign in, open a workspace, and check takeover plus the terminal in that RPM before calling the desktop done.
 4. **Model save was not reproduced against production.** The race is fixed and covered by `TestProviderSaveWaitsForInFlightCall`. A live save on a real workspace is still the check that it no longer returns 502.
 5. **Windows, macOS, and .deb** still come only from `.github/workflows/desktop.yml` on a `v*` tag. Do not create a tag unless a release is wanted.
