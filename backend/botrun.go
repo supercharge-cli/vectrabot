@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -143,54 +144,105 @@ func (h *botHub) agentCommand(botID string) (*exec.Cmd, error) {
 	return cmd, nil
 }
 
-// e2bAgentEnv selects the E2B desktop agent and points it at the sandbox
-// desktop controller. Without this the CLI stays on the local toolset and
-// cannot click, type, or see the VM desktop.
+// e2bAgentEnv selects the E2B desktop agent and points it at the desktop
+// controller for this bot. The controller is the browser sidecar started by
+// the VM image; desktop observe and action tools talk to it, not to the
+// person's own computer.
 func e2bAgentEnv(botID string) []string {
-	owner := botID
-	if owner == "" {
-		owner = "main"
-	}
-	var cleaned strings.Builder
-	for _, r := range owner {
-		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
-			cleaned.WriteRune(r)
-		}
-	}
-	owner = cleaned.String()
-	if owner == "" {
-		owner = "main"
-	}
-	if len(owner) > 128 {
-		owner = owner[:128]
-	}
-	display := strings.TrimSpace(os.Getenv("VECTRABOT_DISPLAY"))
-	if display == "" {
-		display = ":99"
-	}
-	runtime := strings.TrimSpace(os.Getenv("VECTRABOT_DESKTOP_RUNTIME"))
-	if runtime == "" {
-		runtime = "/tmp/supercharge-browser"
-	}
-	xauth := strings.TrimSpace(os.Getenv("VECTRABOT_XAUTHORITY"))
-	if xauth == "" {
-		xauth = runtime + "/Xauthority"
-	}
-	port := strings.TrimSpace(os.Getenv("SUPERAGENT_BROWSER_SIDECAR_PORT"))
-	if port == "" {
-		port = "9224"
-	}
+	desk := ensureBotDesktop(botID)
 	return []string{
 		"SUPERCHARGE_RUNTIME_MODE=e2b",
 		"SUPERCHARGE_AGENT=supercharge-e2b",
 		"SUPERCHARGE_DESKTOP_PROTOCOL=1",
 		"SUPERCHARGE_DISABLE_AUTOUPDATER=1",
-		"DISPLAY=" + display,
-		"XAUTHORITY=" + xauth,
-		"DBUS_SESSION_BUS_ADDRESS=unix:path=" + runtime + "/bus",
-		"SUPERAGENT_BROWSER_SIDECAR_PORT=" + port,
-		"VECTRA_BROWSER_OWNER=" + owner,
+		"DISPLAY=" + desk.display,
+		"XAUTHORITY=" + desk.runtime + "/Xauthority",
+		"DBUS_SESSION_BUS_ADDRESS=unix:path=" + desk.runtime + "/bus",
+		"SUPERAGENT_BROWSER_SIDECAR_PORT=" + desk.port,
+		"VECTRA_BROWSER_OWNER=" + desk.owner,
 	}
+}
+
+type botDesktop struct {
+	display string
+	runtime string
+	port    string
+	owner   string
+}
+
+func desktopOwner(botID string) string {
+	var cleaned strings.Builder
+	for _, r := range botID {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			cleaned.WriteRune(r)
+		}
+	}
+	owner := cleaned.String()
+	if owner == "" {
+		owner = "main"
+	}
+	if len(owner) > 80 {
+		owner = owner[:80]
+	}
+	return owner
+}
+
+// desktopForSlot matches the VM desktop starter: main is display :99 and
+// sidecar 9224; every other bot gets the slot written under its runtime dir.
+func desktopForSlot(botID string, slot int) botDesktop {
+	if slot < 0 || slot > 300 {
+		slot = 0
+	}
+	runtime := "/tmp/supercharge-browser"
+	port := 9224
+	if raw := strings.TrimSpace(os.Getenv("SUPERAGENT_BROWSER_SIDECAR_PORT")); slot == 0 && raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			port = n
+		}
+	}
+	displayN := 99 + slot
+	if slot > 0 {
+		runtime = "/tmp/supercharge-browser/bots/" + botID
+		port = 13000 + slot
+	}
+	if slot == 0 {
+		if display := strings.TrimSpace(os.Getenv("VECTRABOT_DISPLAY")); display != "" {
+			return botDesktop{display: display, runtime: runtime, port: strconv.Itoa(port), owner: botID}
+		}
+		if dir := strings.TrimSpace(os.Getenv("VECTRABOT_DESKTOP_RUNTIME")); dir != "" {
+			runtime = dir
+		}
+	}
+	return botDesktop{display: ":" + strconv.Itoa(displayN), runtime: runtime, port: strconv.Itoa(port), owner: botID}
+}
+
+// ensureBotDesktop starts the VM desktop controller for this bot when the
+// image script is present, then reads the slot it assigned.
+func ensureBotDesktop(botID string) botDesktop {
+	owner := desktopOwner(botID)
+	script := strings.TrimSpace(os.Getenv("VECTRABOT_DESKTOP_START"))
+	if script == "" {
+		script = "/opt/vectra/browser-runtime/start.sh"
+	}
+	if info, err := os.Stat(script); err == nil && !info.IsDir() {
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		cmd := exec.CommandContext(ctx, "bash", script)
+		cmd.Env = append(os.Environ(), "SUPERAGENT_DESKTOP_BOT_ID="+owner, "SUPERCHARGE_RUNTIME_MODE=e2b")
+		_ = cmd.Run()
+		cancel()
+	}
+	slot := 0
+	if owner != "main" {
+		raw, err := os.ReadFile("/tmp/supercharge-browser/bots/" + owner + "/slot")
+		if err == nil {
+			if n, conv := strconv.Atoi(strings.TrimSpace(string(raw))); conv == nil && n >= 1 && n <= 300 {
+				slot = n
+			}
+		}
+	}
+	desk := desktopForSlot(owner, slot)
+	desk.owner = owner
+	return desk
 }
 
 // runtimeFor returns the bot's running process, starting it when needed.

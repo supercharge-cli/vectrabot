@@ -30,6 +30,10 @@ func TestE2BAgentEnvPointsAtDesktopController(t *testing.T) {
 	if env[len(env)-1] != "VECTRA_BROWSER_OWNER=badbot" {
 		t.Fatal(env[len(env)-1])
 	}
+	other := desktopForSlot("helper", 2)
+	if other.display != ":101" || other.port != "13002" || !strings.HasSuffix(other.runtime, "/bots/helper") {
+		t.Fatalf("%+v", other)
+	}
 }
 
 func TestClipboardReadsTheDesktopSelection(t *testing.T) {
