@@ -718,13 +718,9 @@ function answered(r, text) {
 
 // ---------- composer ----------
 const prompt = $("#chat-prompt");
-const MODES = { default: { label: "Default", icon: "chat", hint: "Edits and commands, with permission prompts" }, plan: { label: "Plan", icon: "map", hint: "Research and propose a plan before changing anything" }, ask: { label: "Ask", icon: "help", hint: "Answer questions; no edits" } };
 function sessionOf() { return state.sessions.get(state.threadId) || {}; }
 function renderComposer() {
   const s = sessionOf();
-  const mode = s.mode || "default"; const m = MODES[mode] || { label: mode, icon: "chat" };
-  $("#mode-label").textContent = m.label; $("#mode-icon").innerHTML = `<use href="#i-${m.icon}"/>`;
-  $("#mode-chip").className = "mode-chip " + mode;
   $("#chat-stop").hidden = !s.busy; $("#chat-send").hidden = !!s.busy && !prompt.value.trim();
   updateComposer();
   const foot = $("#composer-foot"); foot.replaceChildren();
@@ -759,7 +755,6 @@ prompt.addEventListener("keydown", (e) => {
     else { pickCommand(palette.items[palette.index]); return; }
     renderPalette(true); return;
   }
-  if (e.key === "Tab" && e.shiftKey) { e.preventDefault(); cycleMode(); return; }
   if (e.key === "Escape") { if (!pal.hidden) { pal.hidden = true; return; } if (sessionOf().busy) stopTurn(); return; }
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("#chat-form").requestSubmit(); }
 });
@@ -794,19 +789,6 @@ async function stopTurn() {
   finally { $("#chat-stop").classList.remove("loading"); }
 }
 $("#chat-stop").onclick = stopTurn;
-async function setMode(modeId) {
-  const s = sessionOf(); const prev = s.mode; s.mode = modeId; state.sessions.set(state.threadId, s); renderComposer();
-  try { await api(`/api/threads/${enc(state.threadId)}/mode`, "POST", { modeId }); }
-  catch (err) { s.mode = prev; renderComposer(); wsError(err.message); }
-}
-function cycleMode() { const order = ["default", "plan", "ask"]; setMode(order[(order.indexOf(sessionOf().mode || "default") + 1) % order.length]); }
-$("#mode-chip").onclick = (e) => {
-  e.stopPropagation();
-  const menu = $("#mode-menu"); const current = sessionOf().mode || "default"; menu.style.left = "44px";
-  menu.replaceChildren(...Object.entries(MODES).map(([id, m]) => h("button", { type: "button", class: id === current ? "on" : "", "data-mode": id, onclick: () => { menu.hidden = true; setMode(id); } },
-    h("span", { html: icon(m.icon) }), h("span", { style: { display: "grid" } }, h("span", {}, m.label), h("span", { class: "faint", style: { fontSize: "11.5px" } }, m.hint)), id === current ? h("span", { class: "sub", html: icon("check", "sm") }) : null)));
-  menu.hidden = !menu.hidden;
-};
 // slash commands come from the agent's available_commands_update
 const palette = { items: [], index: 0 };
 function commandList() { const c = sessionOf().commands; return Array.isArray(c) ? c : []; }

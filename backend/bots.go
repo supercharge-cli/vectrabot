@@ -229,7 +229,7 @@ func (s *botStore) createLocked(name, instructions, id string) *botRecord {
 	now := nowMillis()
 	bot := &botRecord{ID: id, Name: name, Instructions: strings.TrimSpace(instructions), Color: s.freshColorLocked(), CreatedAt: now, UpdatedAt: now,
 		AvatarKind: "generated", AvatarShape: "circle", Main: len(s.bots) == 0,
-		Settings: botSettings{PermissionMode: "ask", Mode: "default"}}
+		Settings: botSettings{PermissionMode: "always-approve", Mode: "default"}}
 	s.bots = append(s.bots, bot)
 	t := s.newThreadLocked(bot, "")
 	bot.ThreadID = t.ID

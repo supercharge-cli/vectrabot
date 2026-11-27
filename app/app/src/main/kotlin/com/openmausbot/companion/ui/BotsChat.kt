@@ -84,7 +84,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
-private val modeLabels = mapOf("default" to "Default", "plan" to "Plan", "ask" to "Ask")
 private val permLabels = mapOf("ask" to "Ask before edits", "auto" to "Auto", "always-approve" to "Always approve")
 
 /** The chat with one bot's thread: messages, agent requests and the composer. */
@@ -132,7 +131,6 @@ internal fun BotChatPane(state: BotsState, onProviders: () -> Unit, onNotice: (S
         }
         Composer(state, session, onSend = { text -> act { val q = withContext(Dispatchers.IO) { client.send(bot.id, tid, text) }; if (q) onNotice("Queued — it runs when this turn ends") } },
             onStop = { act { withContext(Dispatchers.IO) { client.interrupt(bot.id, tid) } } },
-            onMode = { mode -> act { withContext(Dispatchers.IO) { client.setMode(tid, mode) }; state.sessions[tid] = state.session.copy(mode = mode) } },
             onOption = { id, value -> act { withContext(Dispatchers.IO) { client.setOption(tid, id, value) }?.let { state.sessions[tid] = it } } },
         )
     }
@@ -398,9 +396,8 @@ private fun answerLabel(r: AgentRequest): String {
 }
 
 @Composable
-private fun Composer(state: BotsState, session: SessionInfo, onSend: (String) -> Unit, onStop: () -> Unit, onMode: (String) -> Unit, onOption: (String, String) -> Unit) {
+private fun Composer(state: BotsState, session: SessionInfo, onSend: (String) -> Unit, onStop: () -> Unit, onOption: (String, String) -> Unit) {
     var draft by rememberSaveable(state.threadId) { mutableStateOf("") }
-    var modeMenu by remember { mutableStateOf(false) }
     val slash = draft.startsWith("/") && ' ' !in draft
     val commands = if (slash) session.commands.filter { it.name.startsWith(draft.drop(1), ignoreCase = true) }.take(8) else emptyList()
     Column(Modifier.fillMaxWidth().background(Vx.bg).padding(start = 12.dp, end = 12.dp, bottom = 10.dp, top = 4.dp)) {
@@ -415,15 +412,6 @@ private fun Composer(state: BotsState, session: SessionInfo, onSend: (String) ->
             }
         }
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(Vx.raised).border(1.dp, Vx.line2, RoundedCornerShape(24.dp)).padding(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.Bottom) {
-            Box {
-                Row(Modifier.clip(RoundedCornerShape(16.dp)).border(1.dp, if (session.mode == "plan") Vx.accent else Vx.line2, RoundedCornerShape(16.dp)).background(if (session.mode == "plan") Vx.accentSoft else Color.Transparent).clickable { modeMenu = true }.padding(horizontal = 10.dp, vertical = 7.dp).testTag("mode-chip"), verticalAlignment = Alignment.CenterVertically) {
-                    Text(modeLabels[session.mode] ?: session.mode, color = if (session.mode == "plan") Vx.accentHi else Vx.text2, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                }
-                DropdownMenu(modeMenu, { modeMenu = false }) {
-                    val modes = session.modes.ifEmpty { modeLabels.map { ConfigChoice(it.key, it.value) } }
-                    modes.forEach { mo -> DropdownMenuItem(text = { Text(mo.name) }, onClick = { modeMenu = false; onMode(mo.value) }, trailingIcon = { if (mo.value == session.mode) Icon(Icons.Default.Check, null, modifier = Modifier.size(16.dp)) }) }
-                }
-            }
             BasicTextField(
                 draft, { draft = it },
                 modifier = Modifier.weight(1f).padding(horizontal = 10.dp, vertical = 8.dp).heightIn(min = 20.dp, max = 140.dp).testTag("chat-input"),

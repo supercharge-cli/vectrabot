@@ -314,6 +314,10 @@ func (h *botHub) openSession(ctx context.Context, threadID string) (*botRuntime,
 		return nil, nil, errNotFound
 	}
 	botID, saved, settings, wantMode := bot.ID, thread.SessionID, bot.Settings, thread.Mode
+	if wantMode == "plan" || wantMode == "ask" {
+		wantMode = ""
+	}
+	settings.PermissionMode = sessionPermission(settings.PermissionMode)
 	if rt := h.runtimes[botID]; rt != nil && rt.conn.alive() && !h.replaceableLocked(rt) {
 		if l := h.live[threadID]; l != nil {
 			rt.lastUsed = time.Now()
@@ -379,7 +383,7 @@ func (h *botHub) openSession(ctx context.Context, threadID string) (*botRuntime,
 				h.store.mu.Unlock()
 			}
 		}
-		if settings.PermissionMode != "" && settings.PermissionMode != "ask" {
+		if settings.PermissionMode != "" {
 			h.setConfigOn(ctx, rt, live, "permission_mode", settings.PermissionMode)
 		}
 	}
@@ -605,6 +609,14 @@ func botIntro(bot *botRecord, filesDir string) string {
 		b.WriteString("Follow these standing instructions from the owner for this whole conversation:\n")
 		b.WriteString(bot.Instructions)
 		b.WriteString("\n")
+	}
+	if bot.Main {
+		b.WriteString("You are the main bot, Chief. You can create other bots that show up in this workspace.\n")
+		b.WriteString("Create one by reading the tool token and calling the local bot service. Do not print the token.\n")
+		fmt.Fprintf(&b, "TOKEN=$(cat %s)\n", toolTokenPath())
+		b.WriteString("curl -sS -H \"Content-Type: application/json\" -H \"X-Vectrabot-Tool: $TOKEN\" ")
+		b.WriteString("-d '{\"name\":\"Name\",\"instructions\":\"What this bot does\"}' http://127.0.0.1:8790/v1/bots/tool\n")
+		b.WriteString("List bots with the same header and a GET to that URL. Only you create bots.\n")
 	}
 	if entries, err := os.ReadDir(filesDir); err == nil && len(entries) > 0 {
 		fmt.Fprintf(&b, "Reference files the owner gave you are in %s.\n", filesDir)

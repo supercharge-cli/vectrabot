@@ -96,5 +96,6 @@ func newServer(tokens *tokenStore, root string) http.Handler {
 	routines := openRoutines(root, bots)
 	go routines.schedule()
 	registerBotRoutes(guard, bots, routines, newProviderControl(bots))
+	mux.HandleFunc("/v1/bots/tool", bots.serveToolBots)
 	return allowBrowsers(rejectHTML(mux))
 }
