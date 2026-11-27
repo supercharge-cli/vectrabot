@@ -112,14 +112,18 @@ kbd { font: 11px var(--mono); padding: 1px 5px; border: 1px solid var(--line-2);
 
 /* ---------- sign in + workspace list ---------- */
 .page { min-height: 100%; display: grid; place-items: center; padding: 32px 16px; }
-.auth { width: 100%; max-width: 360px; display: grid; gap: 20px; }
+.auth { width: 100%; max-width: 400px; display: grid; gap: 16px; padding: 28px; }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 15px; letter-spacing: -0.01em; }
 .mark { width: 28px; height: 28px; border-radius: 8px; background: var(--accent); display: grid; place-items: center; color: #fff; }
+.mark.lg { width: 36px; height: 36px; border-radius: 10px; }
 .mark svg.i { width: 16px; height: 16px; stroke-width: 2.25; }
-.auth h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
-.auth p { margin: 4px 0 0; color: var(--text-2); }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 20px; }
-.auth form { display: grid; gap: 14px; }
+.mark.lg svg.i { width: 20px; height: 20px; }
+.auth h1 { margin: 8px 0 0; font-size: 28px; font-weight: 600; letter-spacing: -0.03em; }
+.auth p { margin: 6px 0 0; color: var(--text-2); line-height: 1.45; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 20px; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28); }
+.auth .field { display: grid; gap: 6px; }
+.auth .input { height: 42px; }
+.auth .btn.primary { height: 42px; margin-top: 4px; }
 .list-page { width: 100%; max-width: 640px; display: grid; gap: 20px; align-self: start; padding-top: 10vh; }
 .list-head { display: flex; align-items: center; gap: 12px; }
 .list-head h1 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }

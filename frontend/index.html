@@ -61,16 +61,17 @@
 
 <!-- sign in -->
 <section id="login" class="page" hidden>
-  <div class="auth">
-    <div class="brand"><span class="mark"><svg class="i"><use href="#i-logo"/></svg></span>Vectrabot</div>
-    <div><h1>Sign in</h1><p>Use your Vectra Cloud account to open your workspaces.</p></div>
-    <form id="login-form" class="card" novalidate>
-      <label class="field"><span>Email</span><input class="input" id="email" type="email" autocomplete="username" required /></label>
-      <label class="field"><span>Password</span><input class="input" id="password" type="password" autocomplete="current-password" required /></label>
-      <div id="login-error" class="error-text" role="alert"></div>
-      <button class="btn primary" id="signin" type="submit">Continue</button>
-    </form>
-  </div>
+  <form id="login-form" class="auth card" novalidate>
+    <div class="brand"><span class="mark lg"><svg class="i"><use href="#i-logo"/></svg></span>Vectrabot</div>
+    <div>
+      <h1>Sign in</h1>
+      <p>Open your Vectra Cloud workspace.</p>
+    </div>
+    <label class="field"><span>Email</span><input class="input" id="email" type="email" autocomplete="username" placeholder="you@example.com" required /></label>
+    <label class="field"><span>Password</span><input class="input" id="password" type="password" autocomplete="current-password" placeholder="Password" required /></label>
+    <div id="login-error" class="error-text" role="alert"></div>
+    <button class="btn primary" id="signin" type="submit">Continue</button>
+  </form>
 </section>
 
 <!-- workspace list -->

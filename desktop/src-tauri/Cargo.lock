@@ -4280,7 +4280,7 @@ dependencies = [
 
 [[package]]
 name = "vectrabot"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "tauri",
  "tauri-build",

@@ -194,13 +194,19 @@ $("#login-form").onsubmit = async (e) => {
 $("#signout").onclick = () => signOut();
 $("#refresh").onclick = () => loadList();
 async function loadList() {
-  show("workspaces"); $("#list-error").textContent = ""; $("#list-email").textContent = state.email;
   const box = $("#list");
-  box.replaceChildren(...[0, 1].map(() => h("div", { class: "ws" }, h("div", { class: "skeleton", style: { width: "40%", height: "14px" } }))));
+  $("#list-error").textContent = ""; $("#list-email").textContent = state.email;
   try {
     const { instances = [] } = await cloud("/api/instances");
+    state.workspaceCount = instances.length;
+    const back = $("#back");
+    back.disabled = instances.length < 2;
+    back.title = instances.length < 2 ? "" : "All workspaces";
+    back.querySelector(".faint")?.toggleAttribute("hidden", instances.length < 2);
+    if (instances.length === 1) { await openAndLoad(instances[0]); return; }
+    show("workspaces");
     box.replaceChildren();
-    if (!instances.length) { box.append(h("div", { class: "empty" }, h("span", { html: icon("grid") }), h("strong", {}, "No workspaces yet"), h("span", { html: `Create one on <a href="${escapeHtml(CLOUD)}" target="_blank" rel="noreferrer">${escapeHtml(CLOUD.replace(/^https?:\/\//, ""))}</a>, then refresh.` }))); return; }
+    if (!instances.length) { box.append(h("div", { class: "empty" }, h("span", { html: icon("grid") }), h("strong", {}, "No workspace yet"), h("span", { html: `Create one on <a href="${escapeHtml(CLOUD)}" target="_blank" rel="noreferrer">${escapeHtml(CLOUD.replace(/^https?:\/\//, ""))}</a>, then refresh.` }))); return; }
     for (const item of instances) {
       const status = item.status || "unknown";
       const kind = status === "running" ? "ok" : status === "paused" ? "warn" : status === "error" ? "bad" : "";
@@ -244,7 +250,7 @@ function closeWorkspace() {
   stopLive(); endControl({ silent: true }); closeTerminal(); closeEvents();
   state.ws = null;
 }
-$("#back").onclick = () => { closeWorkspace(); loadList(); };
+$("#back").onclick = () => { if ((state.workspaceCount || 0) < 2) return; closeWorkspace(); loadList(); };
 $$("[data-tab]").forEach((b) => (b.onclick = () => selectTab(b.dataset.tab)));
 function selectTab(tab) {
   state.tab = tab;
