@@ -193,14 +193,14 @@ func desktopOwner(botID string) string {
 	return owner
 }
 
-// desktopForSlot matches the VM desktop starter: main is display :99 and
-// sidecar 9224; every other bot gets the slot written under its runtime dir.
+// desktopForSlot matches the VM desktop starter. The image listens on 9223
+// for the main desktop. Other bots use the slot file under their runtime dir.
 func desktopForSlot(botID string, slot int) botDesktop {
 	if slot < 0 || slot > 300 {
 		slot = 0
 	}
 	runtime := "/tmp/supercharge-browser"
-	port := 9224
+	port := 9223
 	if raw := strings.TrimSpace(os.Getenv("SUPERAGENT_BROWSER_SIDECAR_PORT")); slot == 0 && raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
 			port = n
@@ -256,10 +256,28 @@ func ensureBotDesktop(botID string) botDesktop {
 	}
 	desk := desktopForSlot(owner, slot)
 	desk.owner = owner
-	if started {
-		waitSidecar(desk.port)
+	if !sidecarUp(desk.port) {
+		alt := "9224"
+		if desk.port == "9224" {
+			alt = "9223"
+		}
+		if sidecarUp(alt) {
+			desk.port = alt
+		} else if started {
+			waitSidecar(desk.port)
+		}
 	}
 	return desk
+}
+
+func sidecarUp(port string) bool {
+	client := http.Client{Timeout: 700 * time.Millisecond}
+	res, err := client.Get("http://127.0.0.1:" + port + "/status")
+	if err != nil {
+		return false
+	}
+	res.Body.Close()
+	return res.StatusCode == 200
 }
 
 // releaseDeadDisplay removes an X lock whose process is gone. A live display
@@ -283,15 +301,9 @@ func releaseDeadDisplay(display string) {
 }
 
 func waitSidecar(port string) {
-	client := http.Client{Timeout: 2 * time.Second}
-	url := "http://127.0.0.1:" + port + "/status"
 	for i := 0; i < 40; i++ {
-		res, err := client.Get(url)
-		if err == nil {
-			res.Body.Close()
-			if res.StatusCode == 200 {
-				return
-			}
+		if sidecarUp(port) {
+			return
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
