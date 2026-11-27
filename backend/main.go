@@ -40,6 +40,9 @@ func main() {
 			log.Printf("pidfile: %v", err)
 		}
 	}
+	// Bring the VM desktop up before the first turn. The agent’s observe and
+	// action tools talk to this sidecar; they fail if it is still down.
+	go ensureBotDesktop("main")
 	log.Printf("sandbox-host listening on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, newServer(tokens, root)))
 }

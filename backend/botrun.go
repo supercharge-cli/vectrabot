@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -221,19 +223,27 @@ func desktopForSlot(botID string, slot int) botDesktop {
 }
 
 // ensureBotDesktop starts the VM desktop controller for this bot when the
-// image script is present, then reads the slot it assigned.
+// image script is present, then reads the slot it assigned. A dead X lock
+// from an earlier boot otherwise makes the script quit before the sidecar
+// listens, and desktop_observe fails against that port.
 func ensureBotDesktop(botID string) botDesktop {
 	owner := desktopOwner(botID)
 	script := strings.TrimSpace(os.Getenv("VECTRABOT_DESKTOP_START"))
 	if script == "" {
 		script = "/opt/vectra/browser-runtime/start.sh"
 	}
+	started := false
 	if info, err := os.Stat(script); err == nil && !info.IsDir() {
+		started = true
+		releaseDeadDisplay(desktopForSlot(owner, 0).display)
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		cmd := exec.CommandContext(ctx, "bash", script)
 		cmd.Env = append(os.Environ(), "SUPERAGENT_DESKTOP_BOT_ID="+owner, "SUPERCHARGE_RUNTIME_MODE=e2b")
-		_ = cmd.Run()
+		out, err := cmd.CombinedOutput()
 		cancel()
+		if err != nil {
+			log.Printf("desktop start for %s: %v: %s", owner, err, strings.TrimSpace(string(out)))
+		}
 	}
 	slot := 0
 	if owner != "main" {
@@ -246,7 +256,46 @@ func ensureBotDesktop(botID string) botDesktop {
 	}
 	desk := desktopForSlot(owner, slot)
 	desk.owner = owner
+	if started {
+		waitSidecar(desk.port)
+	}
 	return desk
+}
+
+// releaseDeadDisplay removes an X lock whose process is gone. A live display
+// is left alone.
+func releaseDeadDisplay(display string) {
+	n := strings.TrimPrefix(display, ":")
+	if n == "" || n == display {
+		return
+	}
+	lock := "/tmp/.X" + n + "-lock"
+	raw, err := os.ReadFile(lock)
+	if err != nil {
+		return
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if pid > 0 && syscall.Kill(pid, 0) == nil {
+		return
+	}
+	_ = os.Remove(lock)
+	_ = os.Remove("/tmp/.X11-unix/X" + n)
+}
+
+func waitSidecar(port string) {
+	client := http.Client{Timeout: 2 * time.Second}
+	url := "http://127.0.0.1:" + port + "/status"
+	for i := 0; i < 40; i++ {
+		res, err := client.Get(url)
+		if err == nil {
+			res.Body.Close()
+			if res.StatusCode == 200 {
+				return
+			}
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	log.Printf("desktop sidecar is not listening on %s", port)
 }
 
 // runtimeFor returns the bot's running process, starting it when needed.
@@ -616,7 +665,8 @@ func botIntro(bot *botRecord, filesDir string) string {
 	}
 	if bot.Main {
 		b.WriteString("You are the main bot, Chief. You can create other bots that show up in this workspace.\n")
-		b.WriteString("Create one by reading the tool token and calling the local bot service. Do not print the token.\n")
+		b.WriteString("The vectra_bot tool is not connected here and always fails. Do not call it.\n")
+		b.WriteString("Create a bot by reading the tool token and calling the local bot service. Do not print the token.\n")
 		fmt.Fprintf(&b, "TOKEN=$(cat %s)\n", toolTokenPath())
 		b.WriteString("curl -sS -H \"Content-Type: application/json\" -H \"X-Vectrabot-Tool: $TOKEN\" ")
 		b.WriteString("-d '{\"name\":\"Name\",\"instructions\":\"What this bot does\"}' http://127.0.0.1:8790/v1/bots/tool\n")
