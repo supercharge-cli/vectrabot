@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -134,30 +135,21 @@ private data class ChatMessage(val fromUser: Boolean, val text: String, val meta
 @Composable
 fun CloudWorkspaceScreen() {
     val api = remember { CloudApi() }
+    val context = LocalContext.current
+    val account = remember { context.getSharedPreferences("vectra.cloud", android.content.Context.MODE_PRIVATE) }
     val scope = rememberCoroutineScope()
-    var email by rememberSaveable { mutableStateOf("") }
+    var email by rememberSaveable { mutableStateOf(account.getString("email", "").orEmpty()) }
     var password by remember { mutableStateOf("") }
-    var token by rememberSaveable { mutableStateOf("") }
+    var token by rememberSaveable { mutableStateOf(account.getString("token", "").orEmpty()) }
     var workspaces by remember { mutableStateOf(listOf<WorkspaceRow>()) }
+    var listed by remember { mutableStateOf(false) }
     var open by remember { mutableStateOf<OpenSandbox?>(null) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
 
-    fun signOut(message: String = "") { token = ""; open = null; workspaces = emptyList(); error = message }
-    suspend fun loadList(with: String) {
-        val rows = withContext(Dispatchers.IO) { api.get("/api/instances", with) }.optJSONArray("instances")
-        workspaces = buildList {
-            if (rows != null) for (i in 0 until rows.length()) {
-                val item = rows.getJSONObject(i)
-                add(WorkspaceRow(item.optString("id"), item.optString("name", "Workspace"), item.optString("status", "unknown")))
-            }
-        }
-    }
-    fun run(block: suspend () -> Unit) {
-        busy = true; error = ""
-        scope.launch {
-            try { block() } catch (e: SessionExpired) { signOut(e.message ?: "") } catch (e: CancellationException) { throw e } catch (e: Exception) { error = e.message ?: "Something went wrong" } finally { busy = false }
-        }
+    fun signOut(message: String = "") {
+        account.edit().remove("token").remove("email").apply()
+        token = ""; open = null; workspaces = emptyList(); listed = false; error = message
     }
     suspend fun attach(row: WorkspaceRow): OpenSandbox {
         withContext(Dispatchers.IO) { api.post("/api/instances/${row.id}/wake", token, "{}") }
@@ -167,32 +159,62 @@ fun CloudWorkspaceScreen() {
         if (host.isBlank() || session.isBlank()) throw IllegalStateException("The workspace did not return a session")
         return OpenSandbox(row.id, row.name, host, session, token)
     }
-    LaunchedEffect(token) { if (token.isNotBlank() && workspaces.isEmpty()) run { loadList(token) } }
-    BackHandler(enabled = open != null) { open = null }
+    suspend fun loadList(with: String) {
+        val rows = withContext(Dispatchers.IO) { api.get("/api/instances", with) }.optJSONArray("instances")
+        val next = buildList {
+            if (rows != null) for (i in 0 until rows.length()) {
+                val item = rows.getJSONObject(i)
+                add(WorkspaceRow(item.optString("id"), item.optString("name", "Workspace"), item.optString("status", "unknown")))
+            }
+        }
+        workspaces = next
+        if (next.size == 1 && open == null) open = attach(next.first())
+        listed = true
+    }
+    fun run(block: suspend () -> Unit) {
+        busy = true; error = ""
+        scope.launch {
+            try { block() } catch (e: SessionExpired) { signOut(e.message ?: "") } catch (e: CancellationException) { throw e } catch (e: Exception) { error = e.message ?: "Something went wrong" } finally { busy = false }
+        }
+    }
+    LaunchedEffect(token) { if (token.isNotBlank() && !listed) run { loadList(token) } }
+    BackHandler(enabled = open != null && workspaces.size >= 2) { open = null }
 
     VectraTheme { Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(modifier = Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
             val current = open
             when {
-                token.isBlank() -> Column(
-                    modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
-                ) {
-                    Spacer(Modifier.height(24.dp))
-                    Text("Vectra", style = MaterialTheme.typography.headlineMedium)
-                    Text("Sign in to your cloud workspaces. The agent, its desktop and your apps run in the cloud sandbox, not on this phone.", style = MaterialTheme.typography.bodyMedium, color = secondaryTint)
-                    OutlinedTextField(email, { email = it }, label = { Text("Email") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(password, { password = it }, label = { Text("Password") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
-                    Button(onClick = {
-                        run {
-                            val body = JSONObject().put("email", email.trim()).put("password", password).toString()
-                            val next = withContext(Dispatchers.IO) { api.post("/api/auth/login", null, body) }.optString("token")
-                            if (next.isBlank()) throw IllegalStateException("The server did not return a token")
-                            loadList(next); password = ""; token = next
+                token.isBlank() -> Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+                    Column(
+                        Modifier.widthIn(max = 400.dp).fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Vx.panel).border(1.dp, Vx.line, RoundedCornerShape(16.dp)).padding(28.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Box(Modifier.size(36.dp).clip(RoundedCornerShape(10.dp)).background(Vx.accent), contentAlignment = Alignment.Center) {
+                                Text("V", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                            }
+                            Text("Vectrabot", color = Vx.text, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
                         }
-                    }, enabled = !busy && email.isNotBlank() && password.isNotBlank(), modifier = Modifier.fillMaxWidth()) { Text(if (busy) "Signing in…" else "Sign in") }
-                    if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text("Sign in", color = Vx.text, fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
+                            Text("Open your Vectra Cloud workspace.", color = Vx.text2, fontSize = 14.sp)
+                        }
+                        OutlinedTextField(email, { email = it }, label = { Text("Email") }, placeholder = { Text("you@example.com") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(password, { password = it }, label = { Text("Password") }, placeholder = { Text("Password") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                        if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+                        Button(onClick = {
+                            run {
+                                val body = JSONObject().put("email", email.trim()).put("password", password).toString()
+                                val next = withContext(Dispatchers.IO) { api.post("/api/auth/login", null, body) }.optString("token")
+                                if (next.isBlank()) throw IllegalStateException("The server did not return a token")
+                                account.edit().putString("token", next).putString("email", email.trim()).apply()
+                                password = ""; token = next
+                                loadList(next)
+                            }
+                        }, enabled = !busy && email.isNotBlank() && password.isNotBlank(), modifier = Modifier.fillMaxWidth().height(42.dp)) { Text(if (busy) "Signing in…" else "Continue") }
+                    }
                 }
+                current == null && !listed -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Vx.accent) }
                 current == null -> Column(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("Workspaces", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
@@ -220,7 +242,8 @@ fun CloudWorkspaceScreen() {
                     api = api,
                     sandbox = current,
                     email = email,
-                    onBack = { open = null },
+                    manyWorkspaces = workspaces.size >= 2,
+                    onBack = { if (workspaces.size >= 2) open = null },
                     onSignOut = { signOut() },
                 )
             }
@@ -250,6 +273,7 @@ private fun WorkspaceView(
     api: CloudApi,
     sandbox: OpenSandbox,
     email: String,
+    manyWorkspaces: Boolean,
     onBack: () -> Unit,
     onSignOut: () -> Unit,
 ) {
@@ -313,7 +337,7 @@ private fun WorkspaceView(
     Box(Modifier.fillMaxSize().background(Vx.bg)) {
         when (panel) {
             Panel.Home -> BotHome(bots, sandbox.name, email, onOpen = { openBot(it) }, onNewBot = { creating = true },
-                onProviders = { panel = Panel.Providers }, onRoutines = { panel = Panel.Routines }, onWorkspaces = onBack, onSignOut = onSignOut)
+                onProviders = { panel = Panel.Providers }, onRoutines = { panel = Panel.Routines }, onWorkspaces = onBack, onSignOut = onSignOut, manyWorkspaces = manyWorkspaces)
             Panel.Providers -> ProvidersPanel(bots.client, onBack = { panel = if (bots.botId.isNotBlank() && bots.threadId.isNotBlank()) Panel.Chat else Panel.Home })
             Panel.Routines -> RoutinesPanel(bots, onBack = { panel = Panel.Home })
             Panel.Info -> BotInfoPanel(bots, onBack = { panel = Panel.Chat }, onEdit = { editing = bots.bot },

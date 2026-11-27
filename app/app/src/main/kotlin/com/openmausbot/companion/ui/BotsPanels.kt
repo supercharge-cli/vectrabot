@@ -109,14 +109,14 @@ internal fun SectionBox(title: String, icon: ImageVector, trailing: @Composable 
 
 /** The bot list: what opens first in a workspace. */
 @Composable
-internal fun BotHome(state: BotsState, workspace: String, email: String, onOpen: (Bot) -> Unit, onNewBot: () -> Unit, onProviders: () -> Unit, onRoutines: () -> Unit, onWorkspaces: () -> Unit, onSignOut: () -> Unit) {
+internal fun BotHome(state: BotsState, workspace: String, email: String, onOpen: (Bot) -> Unit, onNewBot: () -> Unit, onProviders: () -> Unit, onRoutines: () -> Unit, onWorkspaces: () -> Unit, onSignOut: () -> Unit, manyWorkspaces: Boolean = false) {
     var query by remember { mutableStateOf("") }
     var searching by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().background(Vx.panel)) {
         Row(Modifier.fillMaxWidth().height(56.dp).padding(start = 14.dp, end = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(26.dp).clip(RoundedCornerShape(7.dp)).background(Vx.accent), contentAlignment = Alignment.Center) { Text(workspace.take(1).uppercase(), color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp) }
-            Text(workspace, color = Vx.text, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(start = 10.dp).clickable(onClick = onWorkspaces))
+            Text(workspace, color = Vx.text, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(start = 10.dp).then(if (manyWorkspaces) Modifier.clickable(onClick = onWorkspaces) else Modifier))
             IconAction(Icons.Default.Search, "Search") { searching = !searching; if (!searching) query = "" }
             IconAction(Icons.Default.Edit, "New bot", onNewBot)
         }
@@ -144,7 +144,7 @@ internal fun BotHome(state: BotsState, workspace: String, email: String, onOpen:
             DropdownMenu(menu, { menu = false }) {
                 DropdownMenuItem(text = { Text("Providers") }, leadingIcon = { Icon(Icons.Default.Lock, null) }, onClick = { menu = false; onProviders() })
                 DropdownMenuItem(text = { Text("Routines") }, leadingIcon = { Icon(Icons.Default.DateRange, null) }, onClick = { menu = false; onRoutines() })
-                DropdownMenuItem(text = { Text("Workspaces") }, leadingIcon = { Icon(Icons.Default.Settings, null) }, onClick = { menu = false; onWorkspaces() })
+                if (manyWorkspaces) DropdownMenuItem(text = { Text("Workspaces") }, leadingIcon = { Icon(Icons.Default.Settings, null) }, onClick = { menu = false; onWorkspaces() })
                 DropdownMenuItem(text = { Text("Sign out", color = Vx.bad) }, leadingIcon = { Icon(Icons.Default.ExitToApp, null, tint = Vx.bad) }, onClick = { menu = false; onSignOut() })
             }
         }

@@ -9,10 +9,11 @@ const CLOUD = (LOCAL_PAGE && new URLSearchParams(location.search).get("cloud")) 
 const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => [...root.querySelectorAll(s)];
 const enc = encodeURIComponent;
-const store = sessionStorage; // the sign-in lasts for this window only
+const store = sessionStorage; // per-window choices, such as the open bot
+const auth = localStorage; // the cloud sign-in survives an app update
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const state = {
-  token: store.getItem("vb.token") || "", email: store.getItem("vb.email") || "",
+  token: auth.getItem("vb.token") || "", email: auth.getItem("vb.email") || "",
   ws: null, tab: "chat",
   bots: [], botId: "", threadId: "",
   messages: new Map(), more: new Map(), sessions: new Map(),
@@ -226,7 +227,7 @@ const setWs = (text, kind) => setStatus($("#ws-dot"), $("#ws-state"), text, kind
 // ---------- sign in / list ----------
 function show(screen) { for (const id of ["login", "workspaces", "workspace"]) $("#" + id).hidden = id !== screen; }
 function signOut(message = "") {
-  closeWorkspace(); state.token = ""; store.removeItem("vb.token"); store.removeItem("vb.email");
+  closeWorkspace(); state.token = ""; auth.removeItem("vb.token"); auth.removeItem("vb.email");
   $("#login-error").textContent = message; show("login");
 }
 $("#login-form").onsubmit = async (e) => {
@@ -237,7 +238,7 @@ $("#login-form").onsubmit = async (e) => {
   try {
     const signed = await cloud("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
     if (!signed.token) throw new Error("The cloud did not return a session");
-    state.token = signed.token; state.email = email; store.setItem("vb.token", signed.token); store.setItem("vb.email", email); $("#password").value = "";
+    state.token = signed.token; state.email = email; auth.setItem("vb.token", signed.token); auth.setItem("vb.email", email); $("#password").value = "";
     await loadList();
   } catch (err) { $("#login-error").textContent = err.message; }
   finally { btn.disabled = false; btn.classList.remove("loading"); }
