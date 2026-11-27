@@ -18,6 +18,57 @@ const state = {
   messages: new Map(), more: new Map(), sessions: new Map(),
   routines: [], runs: [], models: [], query: "",
 };
+// Last page of each thread, kept on this PC so a thread paints before the
+// sandbox answers. The live page replaces it.
+const CHAT_CACHE = "vb.chats.v1";
+function chatBook() {
+  try { return JSON.parse(localStorage.getItem(CHAT_CACHE) || "{}"); } catch { return {}; }
+}
+function packMessages(list) {
+  return (list || []).slice(-80).map((m) => {
+    const copy = { ...m };
+    if (copy.text && copy.text.length > 8000) copy.text = copy.text.slice(0, 8000);
+    if (copy.tool?.output && copy.tool.output.length > 500) copy.tool = { ...copy.tool, output: copy.tool.output.slice(0, 500) + "…" };
+    if (copy.changes) copy.changes = copy.changes.map(({ path, kind }) => ({ path, kind }));
+    return copy;
+  });
+}
+function readChatCache(threadId) {
+  const ws = state.ws?.id; if (!ws || !threadId) return null;
+  const hit = chatBook()[ws]?.[threadId];
+  return hit?.messages ? hit : null;
+}
+function writeChatCache(threadId) {
+  const ws = state.ws?.id; const list = state.messages.get(threadId);
+  if (!ws || !threadId || !list) return;
+  const book = chatBook();
+  const room = book[ws] || {};
+  room[threadId] = { messages: packMessages(list), hasMore: !!state.more.get(threadId), at: Date.now() };
+  const ids = Object.keys(room).sort((a, b) => (room[b].at || 0) - (room[a].at || 0));
+  for (const id of ids.slice(12)) delete room[id];
+  book[ws] = room;
+  try {
+    let raw = JSON.stringify(book);
+    if (raw.length > 1500000) {
+      const rooms = Object.keys(book);
+      delete book[rooms[0]];
+      raw = JSON.stringify(book);
+    }
+    localStorage.setItem(CHAT_CACHE, raw);
+  } catch { /* the live transcript still works */ }
+}
+function forgetChatCache(threadId) {
+  const ws = state.ws?.id; if (!ws) return;
+  const book = chatBook();
+  if (!book[ws]?.[threadId]) return;
+  delete book[ws][threadId];
+  try { localStorage.setItem(CHAT_CACHE, JSON.stringify(book)); } catch { /* ignore */ }
+}
+let chatSaveTimer = null;
+function saveChatSoon(threadId) {
+  clearTimeout(chatSaveTimer);
+  chatSaveTimer = setTimeout(() => writeChatCache(threadId), 400);
+}
 const icon = (name, cls = "") => `<svg class="i ${cls}"><use href="#i-${name}"/></svg>`;
 
 // Open http(s) URLs in the system browser when running inside the Tauri
@@ -389,16 +440,37 @@ function renderThreadTitle() {
 // ---------- threads ----------
 async function openThread(threadId) {
   if (!threadId) return;
-  state.threadId = threadId; renderThreadTitle(); renderThreads(); renderChat(); renderComposer(); renderLibrary();
-  if (!state.messages.has(threadId)) await loadThread(threadId);
+  state.threadId = threadId; renderThreadTitle(); renderThreads(); renderComposer(); renderLibrary();
+  let painted = state.messages.has(threadId);
+  if (!painted) {
+    const cached = readChatCache(threadId);
+    if (cached) {
+      state.messages.set(threadId, cached.messages);
+      state.more.set(threadId, !!cached.hasMore);
+      painted = true;
+    }
+  }
+  renderChat();
+  const job = loadThread(threadId, { quiet: painted });
+  if (!painted) await job;
   if (!state.sessions.get(threadId)?.open) api(`/api/threads/${enc(threadId)}/open`, "POST", {}).then((s) => { state.sessions.set(threadId, s); if (threadId === state.threadId) renderComposer(); }).catch(() => {});
+}
+function sameTranscript(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  const lastA = a[a.length - 1], lastB = b[b.length - 1];
+  return a[0]?.id === b[0]?.id && lastA?.id === lastB?.id && lastA?.text === lastB?.text && lastA?.tool?.status === lastB?.tool?.status;
 }
 async function loadThread(threadId, { quiet = false } = {}) {
   try {
-    const page = await api(`/api/threads/${enc(threadId)}/messages?limit=150`);
-    state.messages.set(threadId, page.messages || []); state.more.set(threadId, !!page.hasMore);
+    const page = await api(`/api/threads/${enc(threadId)}/messages?limit=80`);
+    const next = page.messages || [];
+    const prev = state.messages.get(threadId);
+    const unchanged = sameTranscript(prev, next);
+    state.messages.set(threadId, next); state.more.set(threadId, !!page.hasMore);
     if (page.session) state.sessions.set(threadId, page.session);
-    if (threadId === state.threadId) { renderChat(); renderComposer(); renderLibrary(); }
+    writeChatCache(threadId);
+    if (threadId === state.threadId && !unchanged) { renderChat(); renderComposer(); renderLibrary(); }
+    else if (threadId === state.threadId && page.session) renderComposer();
   } catch (err) { if (!quiet) wsError(err.message); }
 }
 async function loadOlder() {
@@ -430,7 +502,7 @@ function renderThreads() {
 function threadItem(bot, t) {
   const rename = async (e) => { e.stopPropagation(); const title = window.prompt("Rename thread", t.title || ""); if (title == null) return; await api(`/api/bots/${enc(bot.id)}/tasks/${enc(t.threadId)}`, "PATCH", { title }).catch((err) => wsError(err.message)); t.title = title; renderThreads(); renderThreadTitle(); };
   const pin = async (e) => { e.stopPropagation(); await api(`/api/bots/${enc(bot.id)}/tasks/${enc(t.threadId)}`, "PATCH", { pinned: !t.pinned }).catch((err) => wsError(err.message)); };
-  const del = async (e) => { e.stopPropagation(); if (!confirm(`Delete “${t.title || "this thread"}”? Its messages are removed.`)) return; try { await api(`/api/bots/${enc(bot.id)}/tasks/${enc(t.threadId)}`, "DELETE"); state.messages.delete(t.threadId); } catch (err) { wsError(err.message); } };
+  const del = async (e) => { e.stopPropagation(); if (!confirm(`Delete “${t.title || "this thread"}”? Its messages are removed.`)) return; try { await api(`/api/bots/${enc(bot.id)}/tasks/${enc(t.threadId)}`, "DELETE"); state.messages.delete(t.threadId); forgetChatCache(t.threadId); } catch (err) { wsError(err.message); } };
   return h("button", { class: "li" + (t.threadId === state.threadId ? " on" : ""), type: "button", onclick: () => openThread(t.threadId) },
     t.busy ? h("span", { class: "spinner" }) : h("span", { class: "faint", html: icon(t.pinned ? "pin" : "chat", "sm") }),
     h("span", { class: "t" }, t.title || "New thread"),
@@ -532,6 +604,7 @@ function upsertMessage(threadId, m) {
   const list = state.messages.get(threadId); if (!list) return;
   const i = list.findIndex((x) => x.id === m.id);
   if (i >= 0) list[i] = m; else list.push(m);
+  saveChatSoon(threadId);
   if (threadId !== state.threadId) return;
   const el = document.getElementById("m-" + m.id);
   const scroller = $("#chat-scroll"); const atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;

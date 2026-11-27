@@ -255,6 +255,7 @@ private fun WorkspaceView(
 ) {
     val client = remember { CloudSandboxClient() }
     val ws = remember(sandbox.instanceId) { WorkspaceState() }
+    val context = LocalContext.current
     val bots = remember(sandbox.instanceId) {
         BotsState(BotsClient().apply {
             host = sandbox.host; session = sandbox.session
@@ -265,7 +266,7 @@ private fun WorkspaceView(
                     host = a.optString("url").ifBlank { host }; session = a.optString("token").ifBlank { session }
                 }.isSuccess
             }
-        })
+        }, ChatCache(java.io.File(context.filesDir, "chat/" + sandbox.instanceId)))
     }
     val scope = rememberCoroutineScope()
     var panel by rememberSaveable(sandbox.instanceId) { mutableStateOf(Panel.Home) }

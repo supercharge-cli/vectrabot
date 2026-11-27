@@ -12,7 +12,7 @@ import org.json.JSONObject
  * Everything the phone shows about one workspace's bots, kept current by the
  * host's event stream. Frames are applied on the main thread.
  */
-internal class BotsState(val client: BotsClient) {
+internal class BotsState(val client: BotsClient, val cache: ChatCache? = null) {
     var bots by mutableStateOf(listOf<Bot>())
     var botId by mutableStateOf("")
     var threadId by mutableStateOf("")
@@ -43,18 +43,20 @@ internal class BotsState(val client: BotsClient) {
         bots = if (i >= 0) bots.toMutableList().also { it[i] = b } else bots + b
     }
 
-    fun loaded(threadId: String, page: BotsClient.Page, older: Boolean = false) {
+    fun loaded(threadId: String, page: BotsClient.Page, older: Boolean = false, persist: Boolean = true) {
         val list = messages.getOrPut(threadId) { mutableStateListOf() }
         if (older) list.addAll(0, page.messages.filter { m -> list.none { it.id == m.id } })
         else { list.clear(); list.addAll(page.messages) }
         hasMore[threadId] = page.hasMore
         if (!older && page.session.threadId.isNotBlank()) sessions[threadId] = page.session
+        if (!older && persist) cache?.save(threadId, list, page.hasMore)
     }
 
     fun upsert(threadId: String, m: BotMessage) {
         val list = messages[threadId] ?: return
         val i = list.indexOfFirst { it.id == m.id }
         if (i >= 0) list[i] = m else list.add(m)
+        cache?.save(threadId, list, hasMore[threadId] == true)
     }
 
     /** Applies one frame; returns true when the client should reload (a fresh stream). */

@@ -102,7 +102,12 @@ internal fun BotChatPane(state: BotsState, onProviders: () -> Unit, onNotice: (S
     }
     LaunchedEffect(tid) {
         if (tid.isBlank()) return@LaunchedEffect
-        if (state.messages[tid] == null) runCatching { state.loaded(tid, withContext(Dispatchers.IO) { client.messages(tid) }) }.onFailure { onNotice(it.message ?: "Couldn't load the thread") }
+        if (state.messages[tid] == null) {
+            val cached = withContext(Dispatchers.IO) { state.cache?.read(tid) }
+            if (cached != null && state.messages[tid] == null) state.loaded(tid, cached, persist = false)
+            runCatching { state.loaded(tid, withContext(Dispatchers.IO) { client.messages(tid) }) }
+                .onFailure { if (state.messages[tid] == null) onNotice(it.message ?: "Couldn't load the thread") }
+        }
         runCatching { val s = withContext(Dispatchers.IO) { client.open(tid) }; state.sessions[tid] = s }
     }
     LaunchedEffect(tid, messages.size) { if (messages.isNotEmpty()) list.animateScrollToItem(messages.size) }
