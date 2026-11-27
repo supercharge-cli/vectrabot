@@ -150,7 +150,7 @@ func (h *botHub) agentCommand(botID string) (*exec.Cmd, error) {
 // person's own computer.
 func e2bAgentEnv(botID string) []string {
 	desk := ensureBotDesktop(botID)
-	return []string{
+	env := []string{
 		"SUPERCHARGE_RUNTIME_MODE=e2b",
 		"SUPERCHARGE_AGENT=supercharge-e2b",
 		"SUPERCHARGE_DESKTOP_PROTOCOL=1",
@@ -161,6 +161,10 @@ func e2bAgentEnv(botID string) []string {
 		"SUPERAGENT_BROWSER_SIDECAR_PORT=" + desk.port,
 		"VECTRA_BROWSER_OWNER=" + desk.owner,
 	}
+	if id := sandboxID(); id != "" {
+		env = append(env, "SUPERCHARGE_SANDBOX_ID="+id, "E2B_SANDBOX_ID="+id)
+	}
+	return env
 }
 
 type botDesktop struct {
@@ -621,7 +625,8 @@ func botIntro(bot *botRecord, filesDir string) string {
 	if entries, err := os.ReadDir(filesDir); err == nil && len(entries) > 0 {
 		fmt.Fprintf(&b, "Reference files the owner gave you are in %s.\n", filesDir)
 	}
-	b.WriteString("Do not mention this profile block unless asked.\n</bot_profile>")
+	b.WriteString("Do not mention this profile block unless asked.\n</bot_profile>\n")
+	b.WriteString(sandboxBrief())
 	return b.String()
 }
 

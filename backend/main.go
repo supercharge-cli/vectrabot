@@ -64,6 +64,8 @@ func newServer(tokens *tokenStore, root string) http.Handler {
 	})
 	guard("GET /v1/files", func(w http.ResponseWriter, r *http.Request) { serveReadFile(root, w, r) })
 	guard("PUT /v1/files", func(w http.ResponseWriter, r *http.Request) { serveWriteFile(root, w, r) })
+	guard("DELETE /v1/files", func(w http.ResponseWriter, r *http.Request) { serveDeleteFile(root, w, r) })
+	guard("POST /v1/folders", func(w http.ResponseWriter, r *http.Request) { serveMakeDir(root, w, r) })
 	guard("GET /v1/status", work.serveStatus)
 	shells := newShellPool(root)
 	guard("GET /v1/terminal", func(w http.ResponseWriter, r *http.Request) {
