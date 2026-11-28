@@ -13,11 +13,24 @@ func TestSandboxBriefUsesTheRealId(t *testing.T) {
 	t.Setenv("E2B_SANDBOX_ID", "sbx-test")
 	t.Setenv("E2B_TEMPLATE_ID", "vectrabot-workspace")
 	t.Setenv("E2B_DOMAIN", "e2b.app")
-	text := sandboxBrief()
+	text := sandboxBrief("bot_test")
 	for _, want := range []string{"sbx-test", "vectrabot-workspace", "https://3000-sbx-test.e2b.app", "desktop_observe"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %s in %s", want, text)
 		}
+	}
+}
+
+func TestSandboxBriefTypesOnTheBotDisplay(t *testing.T) {
+	t.Setenv("E2B_SANDBOX_ID", "sbx-test")
+	t.Setenv("VECTRABOT_DESKTOP_START", "")
+	t.Setenv("VECTRABOT_DISPLAY", ":21")
+	text := sandboxBrief("bot_test")
+	if !strings.Contains(text, "DISPLAY=:") || strings.Contains(text, "DISPLAY=:99") {
+		t.Fatalf("brief does not use a bot display: %s", text)
+	}
+	if !strings.Contains(text, "You have your own desktop") {
+		t.Fatalf("brief does not tell the bot it has its own desktop: %s", text)
 	}
 }
 

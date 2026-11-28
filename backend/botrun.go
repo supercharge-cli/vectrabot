@@ -151,6 +151,8 @@ func (h *botHub) agentCommand(botID string) (*exec.Cmd, error) {
 // the VM image; desktop observe and action tools talk to it, not to the
 // person's own computer.
 func e2bAgentEnv(botID string) []string {
+	// Each bot gets its own display and sidecar so one bot's clicks do not
+	// land on another's screen. The main bot stays on the image desktop.
 	desk := ensureBotDesktop(botID)
 	env := []string{
 		"SUPERCHARGE_RUNTIME_MODE=e2b",
@@ -235,7 +237,9 @@ func ensureBotDesktop(botID string) botDesktop {
 	started := false
 	if info, err := os.Stat(script); err == nil && !info.IsDir() {
 		started = true
-		releaseDeadDisplay(desktopForSlot(owner, 0).display)
+		if owner == "main" {
+			releaseDeadDisplay(desktopForSlot(owner, 0).display)
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		cmd := exec.CommandContext(ctx, "bash", script)
 		cmd.Env = append(os.Environ(), "SUPERAGENT_DESKTOP_BOT_ID="+owner, "SUPERCHARGE_RUNTIME_MODE=e2b")
@@ -253,19 +257,27 @@ func ensureBotDesktop(botID string) botDesktop {
 				slot = n
 			}
 		}
+		if slot == 0 {
+			sum := 0
+			for _, r := range owner {
+				sum += int(r)
+			}
+			slot = 1 + sum%300
+		}
 	}
 	desk := desktopForSlot(owner, slot)
 	desk.owner = owner
-	if !sidecarUp(desk.port) {
+	if owner == "main" && !sidecarUp(desk.port) {
 		alt := "9224"
 		if desk.port == "9224" {
 			alt = "9223"
 		}
 		if sidecarUp(alt) {
 			desk.port = alt
-		} else if started {
-			waitSidecar(desk.port)
 		}
+	}
+	if started && !sidecarUp(desk.port) {
+		waitSidecar(desk.port)
 	}
 	return desk
 }
@@ -678,17 +690,19 @@ func botIntro(bot *botRecord, filesDir string) string {
 	if bot.Main {
 		b.WriteString("You are the main bot, Chief. You can create other bots that show up in this workspace.\n")
 		b.WriteString("The vectra_bot tool is not connected here and always fails. Do not call it.\n")
-		b.WriteString("Create a bot by reading the tool token and calling the local bot service. Do not print the token.\n")
-		fmt.Fprintf(&b, "TOKEN=$(cat %s)\n", toolTokenPath())
-		b.WriteString("curl -sS -H \"Content-Type: application/json\" -H \"X-Vectrabot-Tool: $TOKEN\" ")
-		b.WriteString("-d '{\"name\":\"Name\",\"instructions\":\"What this bot does\"}' http://127.0.0.1:8790/v1/bots/tool\n")
-		b.WriteString("List bots with the same header and a GET to that URL. Only you create bots.\n")
+		path, err := installVectraBot()
+		if err != nil || path == "" {
+			path = "vectra-bot"
+		}
+		fmt.Fprintf(&b, "Create a specialist with: %s create \"Name\" \"What this bot does, in one or two sentences.\"\n", path)
+		fmt.Fprintf(&b, "List them with: %s list\n", path)
+		b.WriteString("Do that yourself when the person asks for a new bot, a researcher, a browser bot, or any other specialist. Do not print the tool token. Only you create bots.\n")
 	}
 	if entries, err := os.ReadDir(filesDir); err == nil && len(entries) > 0 {
 		fmt.Fprintf(&b, "Reference files the owner gave you are in %s.\n", filesDir)
 	}
 	b.WriteString("Do not mention this profile block unless asked.\n</bot_profile>\n")
-	b.WriteString(sandboxBrief())
+	b.WriteString(sandboxBrief(bot.ID))
 	return b.String()
 }
 

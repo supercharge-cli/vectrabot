@@ -57,7 +57,7 @@ func previewURL(port int, sandbox, domain string) string {
 }
 
 // sandboxBrief is the identity the agent must use inside this VM.
-func sandboxBrief() string {
+func sandboxBrief(botID string) string {
 	id := sandboxID()
 	if id == "" {
 		id = "unknown"
@@ -81,7 +81,16 @@ func sandboxBrief() string {
 		b.WriteString("When you share a server, write that full link. Never send localhost, 127.0.0.1, or a bare port for the person to type into the preview.\n")
 		fmt.Fprintf(&b, "Examples: %s and %s\n", previewURL(3000, id, domain), previewURL(5173, id, domain))
 	}
-	b.WriteString("The desktop in this VM is controlled with desktop_observe and desktop_action. Observe before acting, then use that frame's coordinates.\n")
+	b.WriteString("You have your own desktop, separate from the other bots. Control it with desktop_observe and desktop_action. Do not use another bot's display.\n")
+	b.WriteString("Those calls are for you. Do not put a screenshot in the chat unless the person asked to see the screen, or you are showing a result they asked for.\n")
+	b.WriteString("Observe, act on that frame only, then observe again. Do one small step at a time.\n")
+	b.WriteString("Click the window you will type into before typing.\n")
+	if desk := ensureBotDesktop(botID); desk.display != "" {
+		fmt.Fprintf(&b, "desktop_action type often inserts nothing, or only ^M. After the click, type with that display instead: DISPLAY=%s xdotool type --delay 12 -- 'the text' && DISPLAY=%s xdotool key Return.\n", desk.display, desk.display)
+	}
+	b.WriteString("Use run_terminal_command for shell work that does not need the picture. Observe again after either one.\n")
+	b.WriteString("If the screen did not change, click that window again and retry once.\n")
+	b.WriteString("Do not launch a guessed application when that window is already open.\n")
 	b.WriteString("The person cannot open a disk path. Give a preview link, not /home/user/workspace.\n")
 	b.WriteString("</sandbox>")
 	return b.String()
