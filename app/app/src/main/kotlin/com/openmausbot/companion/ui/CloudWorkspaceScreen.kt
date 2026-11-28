@@ -340,7 +340,9 @@ private fun WorkspaceView(
                 onProviders = { panel = Panel.Providers }, onRoutines = { panel = Panel.Routines }, onWorkspaces = onBack, onSignOut = onSignOut, manyWorkspaces = manyWorkspaces)
             Panel.Providers -> ProvidersPanel(bots.client, onBack = { panel = if (bots.botId.isNotBlank() && bots.threadId.isNotBlank()) Panel.Chat else Panel.Home })
             Panel.Routines -> RoutinesPanel(bots, onBack = { panel = Panel.Home })
-            Panel.Info -> BotInfoPanel(bots, onBack = { panel = Panel.Chat }, onEdit = { editing = bots.bot },
+            Panel.Info -> BotInfoPanel(bots, instanceId = sandbox.instanceId, cloud = { method, path, body ->
+                if (method == "GET") api.get(path, sandbox.cloudToken) else api.post(path, sandbox.cloudToken, body ?: "{}")
+            }, onBack = { panel = Panel.Chat }, onEdit = { editing = bots.bot },
                 onThread = { bots.threadId = it; tab = 0; panel = Panel.Chat },
                 onNewThread = { act { val b = bots.bot ?: return@act; val tid = withContext(Dispatchers.IO) { bots.client.newThread(b.id) }; bots.messages[tid] = androidx.compose.runtime.mutableStateListOf(); bots.threadId = tid; tab = 0; panel = Panel.Chat; runCatching { bots.mergeBot(withContext(Dispatchers.IO) { bots.client.bots() }.first { it.id == b.id }) } } },
                 onRoutines = { panel = Panel.Routines }, onProviders = { panel = Panel.Providers }, onTab = { tab = it; panel = Panel.Chat }, onNotice = { toast = it })

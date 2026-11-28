@@ -182,7 +182,7 @@ private fun BotRow(b: Bot, selected: Boolean, onClick: () -> Unit) {
 
 /** The bot's details: threads, routines, computer and settings; files in Library. */
 @Composable
-internal fun BotInfoPanel(state: BotsState, onBack: () -> Unit, onEdit: () -> Unit, onThread: (String) -> Unit, onNewThread: () -> Unit, onRoutines: () -> Unit, onProviders: () -> Unit, onTab: (Int) -> Unit, onNotice: (String) -> Unit) {
+internal fun BotInfoPanel(state: BotsState, onBack: () -> Unit, onEdit: () -> Unit, onThread: (String) -> Unit, onNewThread: () -> Unit, onRoutines: () -> Unit, onProviders: () -> Unit, onTab: (Int) -> Unit, onNotice: (String) -> Unit, instanceId: String = "", cloud: ((String, String, String?) -> JSONObject)? = null) {
     val bot = state.bot ?: return
     val scope = rememberCoroutineScope()
     var tab by remember { mutableStateOf(0) }
@@ -215,12 +215,13 @@ internal fun BotInfoPanel(state: BotsState, onBack: () -> Unit, onEdit: () -> Un
                 }
             }
             Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(9.dp)).background(Vx.bg).border(Vx.border, RoundedCornerShape(9.dp)).padding(3.dp)) {
-                listOf("Activity", "Library").forEachIndexed { i, t ->
+                listOf("Activity", "Library", "Plugins").forEachIndexed { i, t ->
                     Text(t, color = if (tab == i) Vx.text else Vx.text2, fontSize = 13.sp, fontWeight = FontWeight.Medium,
                         modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(if (tab == i) Vx.raised2 else Color.Transparent).clickable { tab = i }.padding(vertical = 7.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                 }
             }
-            if (tab == 0) {
+            when (tab) {
+            0 -> {
                 SectionBox("Threads", Icons.Default.Edit, trailing = { Text("${bot.threads.size}", color = Vx.text3, fontSize = 12.sp, modifier = Modifier.padding(end = 6.dp)) }) {
                     bot.threads.take(30).forEach { t ->
                         Row(Modifier.fillMaxWidth().clip(Vx.small).background(if (t.id == state.threadId) Vx.selected else Color.Transparent).clickable { onThread(t.id) }.padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -269,7 +270,8 @@ internal fun BotInfoPanel(state: BotsState, onBack: () -> Unit, onEdit: () -> Un
                         }
                     }
                 }
-            } else {
+            }
+            1 -> {
                 val context = androidx.compose.ui.platform.LocalContext.current
                 SectionBox("Workspace", Icons.Default.Edit) {
                     if (folder.isNotBlank()) Text("↑ ..", color = Vx.accent, fontSize = 13.sp, modifier = Modifier.clickable { folder = folder.substringBeforeLast('/', "") })
@@ -309,11 +311,100 @@ internal fun BotInfoPanel(state: BotsState, onBack: () -> Unit, onEdit: () -> Un
                     } }
                 }
             }
+            else -> PluginSection(instanceId, bot.id, cloud, onNotice)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PluginSection(instanceId: String, botId: String, cloud: ((String, String, String?) -> JSONObject)?, onNotice: (String) -> Unit) {
+    val scope = rememberCoroutineScope()
+    var installed by remember { mutableStateOf(listOf<JSONObject>()) }
+    var catalog by remember { mutableStateOf(listOf<JSONObject>()) }
+    var note by remember { mutableStateOf(if (cloud == null || instanceId.isBlank()) "Sign in to a workspace to install plugins." else "Loading…") }
+    var query by remember { mutableStateOf("") }
+    var skills by remember { mutableStateOf(listOf<JSONObject>()) }
+    var generation by remember { mutableStateOf(0) }
+    fun plugin(action: String, extra: JSONObject = JSONObject()) {
+        val call = cloud ?: return
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    call("POST", "/api/instances/${java.net.URLEncoder.encode(instanceId, "UTF-8")}/bots/${java.net.URLEncoder.encode(botId, "UTF-8")}/plugin-api", extra.put("action", action).toString())
+                }
+                onNotice("Plugin updated")
+                generation++
+            } catch (e: CancellationException) { throw e } catch (e: Exception) { onNotice(e.message ?: "Plugin request failed") }
+        }
+    }
+    LaunchedEffect(instanceId, botId, cloud, generation) {
+        val call = cloud ?: return@LaunchedEffect
+        if (instanceId.isBlank()) return@LaunchedEffect
+        runCatching {
+            val status = withContext(Dispatchers.IO) { call("POST", "/api/instances/${java.net.URLEncoder.encode(instanceId, "UTF-8")}/bots/${java.net.URLEncoder.encode(botId, "UTF-8")}/plugin-api", JSONObject().put("action", "status").toString()) }
+            val listing = withContext(Dispatchers.IO) { call("GET", "/api/managed-mcp/catalog", null) }
+            installed = status.optJSONObject("inventory")?.optJSONArray("plugins").jsonObjects()
+            catalog = listing.optJSONArray("plugins").jsonObjects()
+            note = if (installed.isEmpty()) "Nothing installed for this bot." else ""
+        }.onFailure { note = it.message ?: "Couldn't load plugins" }
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        SectionBox("Installed", Icons.Default.Check) {
+            if (note.isNotBlank()) Text(note, color = Vx.text3, fontSize = 12.sp)
+            installed.forEach { p ->
+                val name = p.optJSONObject("manifest")?.optString("name").orEmpty().ifBlank { p.optString("id") }
+                val on = p.optBoolean("enabled")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(name, color = Vx.text, fontSize = 13.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(if (on) "Disable" else "Enable", color = Vx.accent, fontSize = 12.sp, modifier = Modifier.clickable {
+                        plugin("pluginAction", JSONObject().put("pluginId", p.optString("id")).put("requestId", java.util.UUID.randomUUID().toString()).put("pluginAction", JSONObject().put("action", if (on) "disable" else "enable").put("expectedRevision", p.optInt("revision"))))
+                    })
+                }
+            }
+        }
+        SectionBox("MCP servers", Icons.Default.Add) {
+            if (catalog.isEmpty()) Text("No reviewed servers.", color = Vx.text3, fontSize = 12.sp)
+            catalog.forEach { entry ->
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(entry.optString("name", entry.optString("id")), color = Vx.text, fontSize = 13.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("Install", color = Vx.accent, fontSize = 12.sp, modifier = Modifier.clickable {
+                        plugin("installCatalog", JSONObject().put("catalogId", entry.optString("id")).put("catalogSha256", entry.optJSONObject("source")?.optString("sha256").orEmpty()).put("requestId", java.util.UUID.randomUUID().toString()))
+                    })
+                }
+            }
+        }
+        SectionBox("Skills", Icons.Default.Search) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                androidx.compose.foundation.text.BasicTextField(query, { query = it }, modifier = Modifier.weight(1f).background(Vx.bg, Vx.small).padding(8.dp), textStyle = androidx.compose.ui.text.TextStyle(color = Vx.text, fontSize = 13.sp))
+                Text("Search", color = Vx.accent, fontSize = 12.sp, modifier = Modifier.clickable {
+                    val call = cloud ?: return@clickable
+                    if (query.trim().length < 2) { onNotice("Type at least 2 letters"); return@clickable }
+                    scope.launch {
+                        runCatching {
+                            val data = withContext(Dispatchers.IO) { call("GET", "/api/marketplace/search?q=" + java.net.URLEncoder.encode(query.trim(), "UTF-8"), null) }
+                            skills = data.optJSONArray("items").jsonObjects().take(12)
+                        }.onFailure { onNotice(it.message ?: "Search failed") }
+                    }
+                })
+            }
+            skills.forEach { item ->
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text((item.optString("owner").let { if (it.isBlank()) "" else "$it/" }) + item.optString("name"), color = Vx.text, fontSize = 13.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (item.optBoolean("installable")) Text("Install", color = Vx.accent, fontSize = 12.sp, modifier = Modifier.clickable {
+                        plugin("installSkillMd", JSONObject().put("owner", item.optString("owner")).put("name", item.optString("name")).put("requestId", java.util.UUID.randomUUID().toString()))
+                    })
+                }
+            }
         }
     }
 }
 
 internal fun formatSize(n: Long) = when { n < 1024 -> "$n B"; n < 1024 * 1024 -> "${n / 1024} KB"; else -> "${n / 1024 / 1024} MB" }
+private fun org.json.JSONArray?.jsonObjects(): List<JSONObject> {
+    if (this == null) return emptyList()
+    return (0 until length()).mapNotNull { optJSONObject(it) }
+}
 internal fun scheduleLabel(r: Routine) = when (r.type) { "daily" -> "Daily ${r.time}"; "interval" -> "Every ${r.everyMinutes} min"; else -> "Once" }
 
 @Composable

@@ -297,7 +297,9 @@ kbd { font: 11px var(--mono); padding: 1px 5px; border: 1px solid var(--line-2);
 .todo .done { color: var(--text-3); text-decoration: line-through; }
 .todo .doing { color: var(--text); }
 .changes { border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); padding: 10px 12px; display: grid; gap: 6px; font-size: 12.5px; }
-.changes .ch { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12px; color: var(--text-2); }
+.changes .ch { display: grid; gap: 8px; font-family: var(--mono); font-size: 12px; color: var(--text-2); }
+.changes .ch-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.chat-shot { display: block; width: 100%; max-width: 100%; height: auto; margin-top: 8px; border-radius: 10px; border: 1px solid var(--line); background: #000; }
 .changes .k { width: 14px; text-align: center; font-weight: 700; }
 .changes .k.added { color: var(--ok); }
 .changes .k.modified { color: var(--warn); }

@@ -240,7 +240,7 @@
         <p class="info-desc" id="info-desc" hidden></p>
         <div class="row" style="margin-top:6px"><button class="btn sm" id="edit-bot" type="button"><svg class="i sm"><use href="#i-edit"/></svg>Edit</button><button class="btn sm ghost" id="info-new-thread" type="button"><svg class="i sm"><use href="#i-plus"/></svg>New thread</button></div>
       </div>
-      <div class="seg"><button type="button" data-info="activity" class="on">Activity</button><button type="button" data-info="library">Library</button></div>
+      <div class="seg"><button type="button" data-info="activity" class="on">Activity</button><button type="button" data-info="library">Library</button><button type="button" data-info="plugins">Plugins</button></div>
       <div id="info-activity" class="grid" style="display:grid;gap:12px">
         <div class="box"><div class="box-head"><svg class="i sm faint"><use href="#i-chat"/></svg>Threads<span class="grow"></span><span class="faint" id="thread-count"></span></div><div class="box-list" id="thread-list"></div></div>
         <div class="box"><div class="box-head"><svg class="i sm faint"><use href="#i-clock"/></svg>Routines<span class="grow"></span><button class="btn ghost icon sm" id="bot-routine-add" type="button" title="New routine"><svg class="i sm"><use href="#i-plus"/></svg></button></div><div class="box-list" id="bot-routines"></div></div>
@@ -258,6 +258,11 @@
         <div class="box"><div class="box-head"><svg class="i sm faint"><use href="#i-file"/></svg>Workspace<span class="grow"></span></div><div class="box-list" id="workspace-list"></div></div>
         <div class="box"><div class="box-head"><svg class="i sm faint"><use href="#i-file"/></svg>Files<span class="grow"></span><button class="btn ghost icon sm" id="lib-upload" type="button" title="Upload"><svg class="i sm"><use href="#i-upload"/></svg></button></div><div class="box-list" id="file-list"></div></div>
         <div class="box"><div class="box-head"><svg class="i sm faint"><use href="#i-fileedit"/></svg>Changed in this thread</div><div class="box-list" id="changed-list"></div></div>
+      </div>
+      <div id="info-plugins" hidden style="display:grid;gap:12px">
+        <div class="box"><div class="box-head"><svg class="i sm faint"><use href="#i-settings"/></svg>Installed<span class="grow"></span><button class="btn ghost icon sm" id="plugins-refresh" type="button" title="Refresh"><svg class="i sm"><use href="#i-refresh"/></svg></button></div><div class="box-list" id="plugin-installed"></div></div>
+        <div class="box"><div class="box-head">MCP servers</div><div class="box-list" id="plugin-catalog"></div></div>
+        <div class="box"><div class="box-head">Skills</div><form class="box-body" id="plugin-search-form"><label class="field"><span>Search</span><input class="input" id="plugin-query" placeholder="At least 2 letters" /></label><button class="btn sm" type="submit">Search</button><div id="plugin-skills" style="display:grid;gap:8px;margin-top:8px"></div></form></div>
       </div>
     </div>
   </aside>

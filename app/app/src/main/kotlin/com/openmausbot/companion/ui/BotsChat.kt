@@ -129,7 +129,7 @@ internal fun BotChatPane(state: BotsState, onProviders: () -> Unit, onNotice: (S
             itemsIndexed(messages) { i, m ->
                 val prev = messages.getOrNull(i - 1)
                 val showLabel = !m.fromUser && (prev == null || prev.fromUser)
-                MessageView(m, bot, showLabel, client, last = i == messages.lastIndex,
+                MessageView(m, bot, showLabel, client, messages, i, last = i == messages.lastIndex,
                     onRespond = { req, answer -> act { withContext(Dispatchers.IO) { client.respond(tid, req.id, answer) } } },
                     onRetry = { text -> act { withContext(Dispatchers.IO) { client.send(bot.id, tid, text) } } },
                     onProviders = onProviders,
@@ -169,7 +169,7 @@ private fun WorkingRow(queued: Int) {
 
 @Composable
 private fun MessageView(
-    m: BotMessage, bot: Bot, showLabel: Boolean, client: BotsClient, last: Boolean,
+    m: BotMessage, bot: Bot, showLabel: Boolean, client: BotsClient, messages: List<BotMessage>, index: Int, last: Boolean,
     onRespond: (AgentRequest, JSONObject) -> Unit, onRetry: (String) -> Unit, onProviders: () -> Unit, lastUserText: String?,
 ) {
     if (m.fromUser) {
@@ -189,12 +189,18 @@ private fun MessageView(
         }
         when (m.kind) {
             "text" -> Box(Modifier.widthIn(max = 340.dp).clip(RoundedCornerShape(6.dp, 18.dp, 18.dp, 18.dp)).background(Vx.raised).padding(horizontal = 14.dp, vertical = 10.dp)) {
-                SelectionContainer { MarkdownText(m.text) }
+                val shots = chatShots(m.text, messages, index)
+                val plain = m.text.replace(Regex("!\\[[^\\]]*\\]\\([^)\\s]+\\)"), "").trim()
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (plain.isNotBlank()) SelectionContainer { MarkdownText(plain) }
+                    shots.forEach { WorkspaceShot(client, it) }
+                    if (plain.isBlank() && shots.isEmpty()) SelectionContainer { MarkdownText(m.text) }
+                }
             }
             "thought" -> Collapsible("Thinking", Icons.Default.Info) { Text(m.text, color = Vx.text2, fontSize = 13.sp) }
             "tool" -> m.tool?.let { ToolCardView(it, client) }
             "todo" -> PlanStepsCard(m.entries)
-            "changes" -> ChangesCard(m.changes)
+            "changes" -> ChangesCard(m.changes, client)
             "request" -> m.request?.let { RequestCardView(it, onRespond) }
             "notice" -> NoticeView(m, last, onRetry = { lastUserText?.let(onRetry) }, onProviders = onProviders)
             else -> Text(m.text, color = Vx.text2)
@@ -271,6 +277,7 @@ internal fun ToolCardView(t: ToolCall, client: BotsClient? = null) {
         }
     }) {
         t.images.forEach { image -> ChatImageView(client, image.id) }
+        if (client != null) imagePaths(t.output).forEach { WorkspaceShot(client, it) }
         t.diffs.forEach { DiffView(it) }
         val out = if (t.output.isBlank()) "" else toolSummary(t.output)
         if (out.isNotBlank() && (t.diffs.isEmpty() || t.status == "failed")) Mono(out, if (t.status == "failed") Vx.bad else Vx.text2)
@@ -323,15 +330,52 @@ private fun PlanStepsCard(entries: List<PlanStep>) {
 }
 
 @Composable
-private fun ChangesCard(changes: List<FileChange>) {
+private fun ChangesCard(changes: List<FileChange>, client: BotsClient) {
     Collapsible("Changed ${changes.size} file" + if (changes.size != 1) "s" else "", Icons.Default.Create, initiallyOpen = true) {
         changes.forEach { c ->
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(c.path, color = Vx.text2, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Tag(c.kind, when (c.kind) { "added" -> Vx.ok; "deleted" -> Vx.bad; else -> Vx.text3 })
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(c.path, color = Vx.text2, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Tag(c.kind, when (c.kind) { "added" -> Vx.ok; "deleted" -> Vx.bad; else -> Vx.text3 })
+                }
+                workspaceImage(c.path)?.let { WorkspaceShot(client, it) }
             }
         }
     }
+}
+
+private val shotMarkdown = Regex("!\\[([^\\]]*)\\]\\(([^)\\s]+)\\)")
+private val shotPath = Regex("""(?:^|[\s"'`(])((?:/home/user/workspace/)?\.?[\w./-]+\.(?:png|jpe?g|gif|webp))""", RegexOption.IGNORE_CASE)
+
+private fun workspaceImage(src: String): String? {
+    var path = src.trim().removePrefix("file://")
+    if (path.startsWith("/home/user/workspace/")) path = path.removePrefix("/home/user/workspace/")
+    if (path.startsWith("http", true) || path.startsWith("data:", true) || path.contains("..")) return null
+    if (!path.matches(Regex(""".*\.(png|jpe?g|gif|webp)$""", RegexOption.IGNORE_CASE))) return null
+    return path.removePrefix("./")
+}
+
+private fun imagePaths(text: String): List<String> = shotPath.findAll(text).mapNotNull { workspaceImage(it.groupValues[1]) }.distinct().toList()
+
+private fun chatShots(text: String, messages: List<BotMessage>, index: Int): List<String> {
+    val direct = shotMarkdown.findAll(text).mapNotNull { workspaceImage(it.groupValues[2]) }.toList()
+    if (direct.isNotEmpty()) return direct
+    if (!shotMarkdown.containsMatchIn(text)) return emptyList()
+    val near = messages.subList((index - 2).coerceAtLeast(0), (index + 3).coerceAtMost(messages.size))
+    return near.flatMap { message -> message.changes.mapNotNull { workspaceImage(it.path) } + imagePaths(message.text + "\n" + (message.tool?.output ?: "")) }.distinct()
+}
+
+@Composable
+private fun WorkspaceShot(client: BotsClient, path: String) {
+    val bitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, path) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                val bytes = client.bytes("/v1/files?path=" + java.net.URLEncoder.encode(path, "UTF-8"))
+                if (bytes.size <= 32) null else android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+            }.getOrNull()
+        }
+    }
+    bitmap?.let { Image(it, contentDescription = "Screenshot", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxWidth().clip(Vx.small)) }
 }
 
 @OptIn(ExperimentalLayoutApi::class)

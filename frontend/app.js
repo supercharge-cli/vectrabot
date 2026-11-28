@@ -540,6 +540,58 @@ function publicizeLinks(src) {
     return `https://${n}-${box.id}.${box.domain}${path || ""}`;
   });
 }
+function isBitmapData(src) {
+  if (!/^data:image\/(?:png|jpeg|jpg|gif|webp);base64,/i.test(src)) return false;
+  try {
+    const raw = atob(src.slice(src.indexOf(",") + 1).slice(0, 24));
+    return raw.startsWith("\x89PNG") || raw.charCodeAt(0) === 0xff || raw.startsWith("GIF8") || raw.startsWith("RIFF");
+  } catch { return false; }
+}
+function shotPath(src) {
+  let path = String(src || "").trim().replace(/^file:\/\//, "");
+  if (path.startsWith(WORKSPACE + "/")) path = path.slice(WORKSPACE.length + 1);
+  if (/^(?:https?:|data:)/i.test(path) || path.includes("..") || !/\.(png|jpe?g|gif|webp)$/i.test(path)) return "";
+  return path.replace(/^\.\//, "");
+}
+function shotSources(text) {
+  const found = [];
+  const re = /!\[([^\]]*)\]\(([^)\s]+)\)/g;
+  let match;
+  while ((match = re.exec(String(text || "")))) found.push({ alt: match[1], src: match[2] });
+  return found;
+}
+function imagePathsIn(text) {
+  const found = [];
+  const re = /(?:^|[\s"'`(])((?:\/home\/user\/workspace\/)?\.?[\w./-]+\.(?:png|jpe?g|gif|webp))/gi;
+  let match;
+  while ((match = re.exec(String(text || "")))) {
+    const path = shotPath(match[1]);
+    if (path) found.push(path);
+  }
+  return found;
+}
+function nearbyImagePaths(list, index) {
+  const found = [];
+  for (const message of (list || []).slice(Math.max(0, index - 2), index + 3)) {
+    for (const change of message.changes || []) {
+      const path = shotPath(change.path);
+      if (path) found.push(path);
+    }
+    found.push(...imagePathsIn(`${message.text || ""}\n${message.tool?.output || ""}`));
+  }
+  return [...new Set(found)];
+}
+function mountShot(src, alt) {
+  const img = h("img", { alt: alt || "Screenshot", class: "chat-shot" });
+  if (isBitmapData(src)) { img.src = src; return img; }
+  const path = shotPath(src);
+  if (!path || !state.ws?.session) return null;
+  fetch(`${state.ws.host}/v1/files?path=${enc(path)}`, { headers: { authorization: "Bearer " + state.ws.session } })
+    .then((res) => res.ok ? res.blob() : null)
+    .then((blob) => { if (blob && blob.size > 32) img.src = URL.createObjectURL(blob); else img.remove(); })
+    .catch(() => img.remove());
+  return img;
+}
 function markdown(src, { streaming = false } = {}) {
   const out = []; const parts = publicizeLinks(src).split(/^```/m);
   parts.forEach((part, i) => {
@@ -671,7 +723,21 @@ function renderMessage(m, list, i) {
   const wrap = (cls, ...kids) => h("div", { class: "msg " + cls, id: "m-" + m.id }, ...kids);
   if (m.role === "user") return wrap("user", h("div", { class: "user-col" }, h("div", { class: "bubble" }, m.text), h("div", { class: "meta-line" }, clock(m.at))));
   switch (m.kind) {
-    case "text": return wrap("agent", h("div", { class: "bubble" }, h("div", { class: "body", html: markdown(m.text) })));
+    case "text": {
+      const shots = [];
+      for (const shot of shotSources(m.text)) {
+        if (isBitmapData(shot.src) || shotPath(shot.src)) shots.push(shot);
+      }
+      if (shotSources(m.text).length && !shots.length) {
+        for (const path of nearbyImagePaths(list, i)) shots.push({ alt: "Screenshot", src: path });
+      }
+      const bubble = h("div", { class: "bubble" });
+      const plain = String(m.text || "").replace(/!\[[^\]]*\]\([^)\s]+\)/g, "").trim();
+      if (plain) bubble.append(h("div", { class: "body", html: markdown(plain) }));
+      for (const shot of shots) { const node = mountShot(shot.src, shot.alt); if (node) bubble.append(node); }
+      if (!bubble.childNodes.length) bubble.append(h("div", { class: "body", html: markdown(m.text) }));
+      return wrap("agent", bubble);
+    }
     case "thought": return wrap("agent", h("details", { class: "thought" }, h("summary", { html: icon("chevron", "sm") + "Thinking" }), h("div", { class: "body" }, m.text)));
     case "notice": return wrap("agent" + (m.error ? " error" : ""), h("div", { class: "notice" + (m.error ? " error" : "") }, m.error ? h("span", { html: icon("alert", "sm") }) : null, h("span", { class: m.error ? "grow" : "" }, m.text),
       m.error && (i === list.length - 1 || m.action === "model" || m.action === "providers") ? noticeActions(m, list, i === list.length - 1) : null));
@@ -704,6 +770,7 @@ function toolCard(t) {
   const out = toolOutput(t.output);
   // An edit's diff already shows what changed; only show its output on failure.
   if (out && (!t.diffs?.length || t.status === "failed")) body.append(h("div", {}, h("h4", {}, t.status === "failed" ? "Error" : "Output"), h("pre", {}, out)));
+  for (const path of imagePathsIn(out)) { const node = mountShot(path, "Screenshot"); if (node) body.append(node); }
   for (const image of t.images || []) {
     if (!image?.id) continue;
     const img = h("img", { alt: "Shared image", style: { maxWidth: "100%", borderRadius: "8px", marginTop: "8px" } });
@@ -714,7 +781,7 @@ function toolCard(t) {
   }
   if (!body.childNodes.length) body.append(h("div", { class: "faint" }, running ? "Running…" : "No output."));
   // Edits open by default so the diff is visible without a click.
-  if ((t.diffs?.length || t.images?.length) && !openTools.has("closed:" + t.id) && !card.classList.contains("open")) { card.classList.add("open"); body.hidden = false; }
+  if ((t.diffs?.length || t.images?.length || imagePathsIn(out).length) && !openTools.has("closed:" + t.id) && !card.classList.contains("open")) { card.classList.add("open"); body.hidden = false; }
   card.append(head, body); return card;
 }
 // Tool results are often JSON envelopes; prefer their human summary.
@@ -744,7 +811,10 @@ function todoCard(entries) {
 function changesCard(changes) {
   const sym = { added: "+", modified: "~", deleted: "−" };
   return h("div", { class: "changes" }, h("div", { class: "row faint", style: { fontSize: "12px" } }, h("span", { html: icon("fileedit", "sm") }), `${changes.length} file${changes.length === 1 ? "" : "s"} changed`),
-    changes.slice(0, 20).map((c) => h("div", { class: "ch" }, h("span", { class: "k " + c.kind }, sym[c.kind] || "~"), h("span", { class: "grow" }, c.path))),
+    changes.slice(0, 20).map((c) => {
+      const shot = shotPath(c.path) ? mountShot(c.path, c.path) : null;
+      return h("div", { class: "ch" }, h("div", { class: "ch-row" }, h("span", { class: "k " + c.kind }, sym[c.kind] || "~"), h("span", { class: "grow" }, c.path)), shot);
+    }),
     changes.length > 20 ? h("div", { class: "faint" }, `and ${changes.length - 20} more`) : null);
 }
 
@@ -941,9 +1011,72 @@ $("#side-toggle").onclick = () => app.classList.toggle("side-open");
 $(".main").addEventListener("pointerdown", (e) => { if (!matchMedia("(max-width: 820px)").matches || e.target.closest("#side-toggle, #info-toggle")) return; app.classList.remove("side-open", "show-info"); });
 $$("[data-info]").forEach((b) => (b.onclick = () => {
   $$("[data-info]").forEach((x) => x.classList.toggle("on", x === b));
-  $("#info-activity").hidden = b.dataset.info !== "activity"; $("#info-library").hidden = b.dataset.info !== "library";
+  $("#info-activity").hidden = b.dataset.info !== "activity";
+  $("#info-library").hidden = b.dataset.info !== "library";
+  $("#info-plugins").hidden = b.dataset.info !== "plugins";
   if (b.dataset.info === "library") { loadFiles(); renderLibrary(); }
+  if (b.dataset.info === "plugins") loadPlugins();
 }));
+async function pluginCall(action, extra = {}) {
+  const bot = currentBot();
+  if (!bot || !state.ws) throw new Error("Open a bot first");
+  return cloud(inst(`/bots/${enc(bot.id)}/plugin-api`), { method: "POST", body: JSON.stringify({ action, ...extra }) });
+}
+function pluginRow(p) {
+  const name = p.manifest?.name || p.id;
+  return h("div", { class: "li" }, h("span", { class: "t grow" }, `${name}${p.enabled ? " · on" : ""}`),
+    h("button", { class: "btn ghost sm", type: "button", onclick: () => pluginAct(p, p.enabled ? "disable" : "enable") }, p.enabled ? "Disable" : "Enable"),
+    h("button", { class: "btn ghost sm", type: "button", onclick: () => pluginAct(p, "uninstall") }, "Remove"));
+}
+async function pluginAct(p, action) {
+  try {
+    await pluginCall("pluginAction", { pluginId: p.id, requestId: crypto.randomUUID(), pluginAction: { action, expectedRevision: p.revision } });
+    await loadPlugins();
+  } catch (err) { toast(err.message); }
+}
+async function installCatalog(entry) {
+  try {
+    await pluginCall("installCatalog", { catalogId: entry.id, catalogSha256: entry.source?.sha256, requestId: crypto.randomUUID() });
+    toast("Installed " + (entry.name || entry.id));
+    await loadPlugins();
+  } catch (err) { toast(err.message); }
+}
+async function installSkill(item) {
+  try {
+    await pluginCall("installSkillMd", { owner: item.owner, name: item.name, requestId: crypto.randomUUID() });
+    toast("Installed " + item.name);
+    await loadPlugins();
+  } catch (err) { toast(err.message); }
+}
+async function loadPlugins() {
+  const installed = $("#plugin-installed");
+  const catalog = $("#plugin-catalog");
+  if (!installed) return;
+  installed.replaceChildren(h("div", { class: "faint", style: { padding: "8px 12px" } }, "Loading…"));
+  try {
+    const [status, listing] = await Promise.all([pluginCall("status"), cloud("/api/managed-mcp/catalog")]);
+    const plugins = status.inventory?.plugins || [];
+    installed.replaceChildren(...(plugins.length ? plugins.map(pluginRow) : [h("div", { class: "faint", style: { padding: "8px 12px" } }, "Nothing installed for this bot.")]));
+    const entries = listing.plugins || [];
+    const have = new Set(plugins.map((p) => p.id));
+    catalog.replaceChildren(...(entries.length ? entries.map((entry) => h("div", { class: "li" }, h("span", { class: "t grow" }, entry.name || entry.id), h("button", { class: "btn ghost sm", type: "button", disabled: have.has(entry.id), onclick: () => installCatalog(entry) }, have.has(entry.id) ? "Installed" : "Install"))) : [h("div", { class: "faint", style: { padding: "8px 12px" } }, "No reviewed servers.")]));
+  } catch (err) {
+    installed.replaceChildren(h("div", { class: "faint", style: { padding: "8px 12px" } }, err.message));
+  }
+}
+$("#plugins-refresh").onclick = () => loadPlugins();
+$("#plugin-search-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const q = $("#plugin-query").value.trim();
+  const box = $("#plugin-skills");
+  if (q.length < 2) { box.replaceChildren(h("div", { class: "faint" }, "Type at least 2 letters.")); return; }
+  box.replaceChildren(h("div", { class: "faint" }, "Searching…"));
+  try {
+    const data = await cloud("/api/marketplace/search?q=" + enc(q));
+    const items = (data.items || []).slice(0, 12);
+    box.replaceChildren(...(items.length ? items.map((item) => h("div", { class: "li" }, h("span", { class: "t grow" }, `${item.owner ? item.owner + "/" : ""}${item.name}`), item.installable ? h("button", { class: "btn ghost sm", type: "button", onclick: () => installSkill(item) }, "Install") : h("span", { class: "faint" }, "Unavailable"))) : [h("div", { class: "faint" }, "No skills.")]));
+  } catch (err) { box.replaceChildren(h("div", { class: "faint" }, err.message)); }
+};
 async function loadModels() {
   try { const { modelState } = await api("/api/models"); state.models = modelState?.availableModels || []; state.currentModel = modelState?.currentModelId || ""; }
   catch { state.models = []; }
