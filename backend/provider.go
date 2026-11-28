@@ -268,6 +268,10 @@ var secretEnvName = regexp.MustCompile(`(?i)(KEY|TOKEN|SECRET|PASSWORD|PASSPHRAS
 // hostOnlyEnv are the host's own credentials; agent turns and terminals never get them.
 var hostOnlyEnv = map[string]bool{"VECTRABOT_SESSION": true, "VECTRABOT_CLOUD_TOKEN": true}
 
+// searchKeyEnv reaches the CLI as a search provider credential rather than a
+// model credential, so the CLI reads it from the environment instead.
+var searchKeyEnv = map[string]bool{"EXA_API_KEY": true}
+
 // childEnv is the environment for processes the host starts on the user's
 // behalf: the host's environment without its own credentials, plus the
 // non-secret settings from the overlays. Provider keys reach the CLI through
@@ -283,7 +287,7 @@ func childEnv(overlay []string) []string {
 	}
 	for _, line := range overlay {
 		key, _, _ := strings.Cut(line, "=")
-		if hostOnlyEnv[key] || secretEnvName.MatchString(key) {
+		if hostOnlyEnv[key] || (secretEnvName.MatchString(key) && !searchKeyEnv[key]) {
 			continue
 		}
 		env = append(env, line)
