@@ -38,9 +38,11 @@ func TestSandboxBriefLetsTheBotSolveAReadableCaptcha(t *testing.T) {
 	t.Setenv("E2B_SANDBOX_ID", "sbx-test")
 	text := sandboxBrief("bot_test")
 	for _, want := range []string{
-		"Solve it yourself",
-		"browser_screenshot",
-		"browser_fill",
+		"ordinary work",
+		"A banned address",
+		"A behaviour flag",
+		"A region wall",
+		"Never loop",
 		"browser_handoff",
 		"reCAPTCHA",
 		"Never use a CAPTCHA-solving service",
@@ -49,9 +51,9 @@ func TestSandboxBriefLetsTheBotSolveAReadableCaptcha(t *testing.T) {
 			t.Fatalf("missing %q in %s", want, text)
 		}
 	}
-	// The CAPTCHA rule must land after the desktop rules so it wins over them.
-	if strings.Index(text, "Solve it yourself") < strings.Index(text, "desktop_observe") {
-		t.Fatal("CAPTCHA rule must follow the desktop rules")
+	// The refusal rules must land after the desktop rules so they win over them.
+	if strings.Index(text, "four different reasons") < strings.Index(text, "desktop_observe") {
+		t.Fatal("refusal rules must follow the desktop rules")
 	}
 }
 
