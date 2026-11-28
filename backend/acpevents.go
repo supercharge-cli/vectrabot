@@ -278,6 +278,9 @@ func (h *botHub) applyUpdateLocked(tid string, live *threadLive, u sessionUpdate
 				}
 				if len(out) > 0 {
 					card.Output = publicizeLinks(clip(strings.Join(out, "\n"), 20000))
+					if card.Status == "" || card.Status == "pending" {
+						card.Status = "completed"
+					}
 				}
 			}
 		}
