@@ -43,6 +43,9 @@ func main() {
 	// Bring the VM desktop up before the first turn. The agent’s observe and
 	// action tools talk to this sidecar; they fail if it is still down.
 	go ensureBotDesktop("main")
+	if _, err := installVectraBot(); err != nil {
+		log.Printf("bot command: %v", err)
+	}
 	log.Printf("sandbox-host listening on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, newServer(tokens, root)))
 }

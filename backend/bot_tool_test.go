@@ -13,8 +13,11 @@ func TestChiefCanCreateABotWithTheToolToken(t *testing.T) {
 	t.Setenv("VECTRABOT_TOOL_TOKEN_FILE", dir+"/token")
 	h := newBotHub(dir, openBotStore(dir, nil), newEventHub())
 	intro := botIntro(h.store.bots[0], dir)
-	if !strings.Contains(intro, "You are the main bot") || !strings.Contains(intro, dir+"/token") {
+	if !strings.Contains(intro, "You are the main bot") || !strings.Contains(intro, "vectra-bot create") {
 		t.Fatalf("intro missing create instructions:\n%s", intro)
+	}
+	if strings.Contains(intro, dir+"/token") {
+		t.Fatal("intro must not tell the bot to print the token path")
 	}
 	no := httptest.NewRecorder()
 	h.serveToolBots(no, httptest.NewRequest(http.MethodPost, "/v1/bots/tool", strings.NewReader(`{"name":"Reviewer"}`)))

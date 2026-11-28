@@ -92,6 +92,32 @@ func (h *botHub) serveToolBots(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"bot": map[string]string{"id": id, "name": botName}})
 }
 
+// installVectraBot writes a command Chief can run to create or list bots.
+// The command reads the tool token itself, so the chat never has to print it.
+func installVectraBot() (string, error) {
+	if _, err := ensureToolToken(); err != nil {
+		return "", err
+	}
+	dir := filepath.Dir(toolTokenPath())
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "vectra-bot")
+	script := "#!/bin/sh\nset -eu\nTOKEN=$(cat " + shellQuote(toolTokenPath()) + ")\nURL=http://127.0.0.1:8790/v1/bots/tool\n" +
+		"if [ \"${1:-}\" = list ]; then\n  curl -sS -H \"X-Vectrabot-Tool: $TOKEN\" \"$URL\"\n  exit 0\nfi\n" +
+		"if [ \"${1:-}\" != create ] || [ -z \"${2:-}\" ]; then\n  echo 'use: vectra-bot list | vectra-bot create \"Name\" \"What this bot does\"' >&2\n  exit 2\nfi\n" +
+		"BODY=$(printf '%s' \"$2\" | python3 -c 'import json,sys; print(json.dumps({\"name\":sys.stdin.read(),\"instructions\":sys.argv[1]}))' \"${3:-}\")\n" +
+		"curl -sS -H \"Content-Type: application/json\" -H \"X-Vectrabot-Tool: $TOKEN\" -d \"$BODY\" \"$URL\"\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
 // sessionPermission is the mode a thread starts in. Ask was the old default;
 // the workspace now runs with every action allowed unless a bot chose auto.
 func sessionPermission(mode string) string {
