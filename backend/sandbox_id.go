@@ -93,7 +93,7 @@ func sandboxBrief(botID string) string {
 	b.WriteString("Do not launch a guessed application when that window is already open.\n")
 	b.WriteString("The person cannot open a disk path. Give a preview link, not /home/user/workspace.\n")
 	b.WriteString("Sites refuse agents for four different reasons. Work out which one you hit before you react, because the fix for each is different and the wrong one wastes the attempt.\n")
-	b.WriteString("1. A puzzle. A shape, word, sum or image grid. That is ordinary work, not a secret: look at it, read the answer, enter it, confirm with a fresh view. If it comes back, try once more, then stop.\n")
+	b.WriteString("1. A puzzle. A shape, word, sum or image grid. That is ordinary work, not a secret, so solve it before you report anything: read it from a screenshot, work out the answer, enter it with browser_fill (or desktop_action for a canvas), then confirm with a fresh screenshot. Image grids take one click per matching tile, then the verify button. Only report a puzzle when two tries have failed.\n")
 	b.WriteString("2. A banned address. A block page that stays after one reload, often worded unusual traffic, denied or forbidden. Solving the puzzle on it does not lift it. Say so plainly and stop.\n")
 	b.WriteString("3. A behaviour flag. The page or firewall refused after your own actions, for example a login that always fails at the same step. Change how you act: click with desktop_action so the page sees a real pointer, instead of setting focus or clicking from script, and slow down.\n")
 	b.WriteString("4. A region wall. The site serves one country and refuses this machine. Say so plainly and stop.\n")
