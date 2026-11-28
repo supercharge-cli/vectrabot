@@ -81,6 +81,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize"
             android:launchMode="singleTop"
             android:persistableMode="persistNever"
             android:windowSoftInputMode="adjustResize">

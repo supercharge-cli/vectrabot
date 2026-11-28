@@ -1539,6 +1539,12 @@ $("#takeover").onclick = async () => {
   const btn = $("#takeover"); btn.classList.add("loading"); wsError("");
   const id = crypto.randomUUID().replace(/-/g, "");
   try {
+    try {
+      const status = await cloud(inst("/computer/status?botId=main"));
+      if (status.handoff && status.handoffId && status.handoffId !== id) {
+        await cloud(inst("/computer/handoff"), { method: "POST", body: JSON.stringify({ action: "stop", handoffId: status.handoffId, botId: "main" }) });
+      }
+    } catch { /* start still takes the desktop */ }
     const r = await cloud(inst("/computer/handoff"), { method: "POST", body: JSON.stringify({ action: "start", minutes: 15, handoffId: id, botId: "main" }) });
     if (r.ok !== true || r.handoff !== true) throw new Error(r.error || "Takeover could not be confirmed");
     stopLive();

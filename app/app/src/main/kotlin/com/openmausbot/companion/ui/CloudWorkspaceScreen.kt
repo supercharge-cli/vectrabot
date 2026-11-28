@@ -61,7 +61,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -413,12 +415,23 @@ private fun ViewTabs(selected: Int, onSelect: (Int) -> Unit) {
 private class Control(val id: String, val expiresAt: Long)
 
 private suspend fun handoff(api: CloudApi, sandbox: OpenSandbox, action: String, id: String, minutes: Int = 15): Long {
-    val body = JSONObject().put("action", action).put("minutes", minutes).put("handoffId", id).put("botId", "main").toString()
-    val reply = withContext(Dispatchers.IO) { api.post("/api/instances/${sandbox.instanceId}/computer/handoff", sandbox.cloudToken, body) }
+    if (action == "start") {
+        val status = runCatching { withContext(Dispatchers.IO) { api.get("/api/instances/${sandbox.instanceId}/computer/status?botId=main", sandbox.cloudToken) } }.getOrNull()
+        val held = status?.optString("handoffId").orEmpty()
+        if (status?.optBoolean("handoff") == true && held.isNotBlank() && held != id) {
+            runCatching { postHandoff(api, sandbox, "stop", held, minutes) }
+        }
+    }
+    val reply = postHandoff(api, sandbox, action, id, minutes)
     if (!reply.optBoolean("ok") || reply.optBoolean("handoff") != (action == "start")) {
         throw IllegalStateException(reply.optString("error").ifBlank { if (action == "start") "Takeover could not be confirmed" else "Return could not be confirmed" })
     }
     return reply.optLong("expiresAt").takeIf { it > 0 } ?: (System.currentTimeMillis() + minutes * 60_000L)
+}
+
+private suspend fun postHandoff(api: CloudApi, sandbox: OpenSandbox, action: String, id: String, minutes: Int): JSONObject {
+    val body = JSONObject().put("action", action).put("minutes", minutes).put("handoffId", id).put("botId", "main").toString()
+    return withContext(Dispatchers.IO) { api.post("/api/instances/${sandbox.instanceId}/computer/handoff", sandbox.cloudToken, body) }
 }
 
 @Composable
@@ -431,6 +444,13 @@ private fun DesktopTab(api: CloudApi, sandbox: OpenSandbox, client: CloudSandbox
     var clip by remember { mutableStateOf("") }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var busy by remember { mutableStateOf(false) }
+    var turned by remember { mutableStateOf(false) }
+    var viewer by remember { mutableStateOf<WebView?>(null) }
+    val activity = LocalContext.current.findHostActivity()
+    // The phone stays portrait. An earlier build had locked the whole app sideways.
+    LaunchedEffect(Unit) {
+        activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+    }
 
     fun act(block: suspend () -> Unit) {
         busy = true
@@ -472,6 +492,7 @@ private fun DesktopTab(api: CloudApi, sandbox: OpenSandbox, client: CloudSandbox
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             val held = control
             Text(if (held != null) "You have control · ${((held.expiresAt - now).coerceAtLeast(0) / 1000).let { "%d:%02d".format(it / 60, it % 60) }}" else status, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+            TextButton(onClick = { turned = !turned }) { Text(if (turned) "Straight" else "Turn") }
             if (held == null) {
                 Button(onClick = {
                     act {
@@ -486,16 +507,29 @@ private fun DesktopTab(api: CloudApi, sandbox: OpenSandbox, client: CloudSandbox
                 Button(onClick = { returnControl() }, enabled = !busy) { Text("Return") }
             }
         }
-        Box(Modifier.weight(1f).fillMaxWidth().background(androidx.compose.ui.graphics.Color.Black, RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
-            when {
-                control != null && socket.isNotBlank() -> DesktopViewer(socket)
-                control != null -> CircularProgressIndicator()
-                frame != null -> Image(frame!!, contentDescription = "The agent's desktop", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxWidth().aspectRatio(1280f / 800f))
-                else -> Text("Loading the desktop…", color = secondaryTint)
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().background(androidx.compose.ui.graphics.Color.Black, RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
+            val picture = if (!turned) Modifier.fillMaxSize()
+                else Modifier.requiredSize(maxHeight, maxWidth).graphicsLayer { rotationZ = 90f }
+            Box(picture, contentAlignment = Alignment.Center) {
+                when {
+                    control != null && socket.isNotBlank() -> DesktopViewer(socket) { viewer = it }
+                    control != null -> CircularProgressIndicator()
+                    frame != null -> Image(frame!!, contentDescription = "The agent's desktop", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+                    else -> Text("Loading the desktop…", color = secondaryTint)
+                }
             }
         }
         if (control != null) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                TextButton(onClick = {
+                    val view = viewer ?: return@TextButton
+                    view.isFocusable = true
+                    view.isFocusableInTouchMode = true
+                    view.requestFocus()
+                    view.evaluateJavascript("window.focusKeys && window.focusKeys()", null)
+                    val imm = view.context.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                    view.post { imm?.showSoftInput(view, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT) }
+                }) { Text("Keyboard") }
                 OutlinedTextField(clip, { clip = it }, placeholder = { Text("Clipboard") }, singleLine = true, modifier = Modifier.weight(1f))
                 TextButton(onClick = { act { clip = withContext(Dispatchers.IO) { client.clipboard(sandbox.host, sandbox.session) } } }) { Text("Get") }
                 TextButton(onClick = { act { withContext(Dispatchers.IO) { client.sendClipboard(sandbox.host, sandbox.session, clip) }; status = "Sent to the desktop clipboard" } }) { Text("Send") }
@@ -521,29 +555,48 @@ private fun desktopBundleClient(context: android.content.Context) = object : Web
 }
 
 @Composable
-private fun DesktopViewer(socket: String) {
+private fun DesktopViewer(socket: String, onView: (WebView) -> Unit) {
     AndroidView(
         factory = { context ->
             WebView(context).apply {
+                isFocusable = true
+                isFocusableInTouchMode = true
+                onView(this)
+                layoutParams = android.view.ViewGroup.LayoutParams(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT)
+                // A hardware layer leaves the noVNC canvas black on some phones.
+                setLayerType(android.view.View.LAYER_TYPE_SOFTWARE, null)
+                setBackgroundColor(android.graphics.Color.parseColor("#111111"))
                 webViewClient = desktopBundleClient(context)
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
+                settings.useWideViewPort = true
+                settings.loadWithOverviewMode = true
                 settings.mediaPlaybackRequiresUserGesture = false
+                settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                 @Suppress("DEPRECATION")
                 settings.allowUniversalAccessFromFileURLs = true
                 android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                 tag = socket
-                loadDataWithBaseURL("https://desktop.vectrabot.invalid/", desktopViewerHtml(socket), "text/html", "utf-8", null)
+                loadDataWithBaseURL("https://infra.xibeai.in/", desktopViewerHtml(socket), "text/html", "utf-8", null)
             }
         },
         update = { view ->
             if (view.tag != socket) {
                 view.tag = socket
-                view.loadDataWithBaseURL("https://desktop.vectrabot.invalid/", desktopViewerHtml(socket), "text/html", "utf-8", null)
+                view.loadDataWithBaseURL("https://infra.xibeai.in/", desktopViewerHtml(socket), "text/html", "utf-8", null)
             }
         },
         modifier = Modifier.fillMaxSize(),
     )
+}
+
+private fun android.content.Context.findHostActivity(): android.app.Activity? {
+    var current = this
+    while (current is android.content.ContextWrapper) {
+        if (current is android.app.Activity) return current
+        current = current.baseContext
+    }
+    return null
 }
 
 @Composable

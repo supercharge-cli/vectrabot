@@ -137,16 +137,42 @@ internal fun desktopViewerHtml(wsUrl: String): String {
     val target = JSONObject.quote(wsUrl).replace("</", "<\\/")
     return """
         <!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>html,body,#screen{margin:0;height:100%;background:#000;color:#ccc;font:14px sans-serif}</style></head>
-        <body><div id="screen"></div>
+        <style>html,body{margin:0;height:100%;background:#111;color:#ddd;font:14px sans-serif}#screen{position:absolute;inset:0;overflow:hidden}#note{position:absolute;left:12px;right:12px;bottom:12px;z-index:2}</style></head>
+        <body><div id="screen"></div><div id="note">Connecting to the desktop…</div>
+        <input id="keys" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" style="position:absolute;left:0;bottom:0;width:1px;height:1px;opacity:0">
         <script src="https://desktop.vectrabot.invalid/novnc/rfb-bundle.js"></script>
         <script>
+        const note = document.getElementById("note");
         const RFB = (window.NovncRFB && (window.NovncRFB.default || window.NovncRFB));
-        if (typeof RFB !== "function") { document.body.textContent = "Desktop viewer failed to load"; }
+        if (typeof RFB !== "function") { note.textContent = "Desktop viewer failed to load"; }
         else {
-          const rfb = new RFB(document.getElementById("screen"), $target, { shared: true });
+          const screen = document.getElementById("screen");
+          const rfb = new RFB(screen, $target, { shared: true });
           rfb.scaleViewport = true;
-          rfb.addEventListener("disconnect", () => { document.body.textContent = "Desktop disconnected"; });
+          rfb.resizeSession = false;
+          rfb.qualityLevel = 6;
+          rfb.compressionLevel = 2;
+          const fit = () => { screen.style.width = window.innerWidth + "px"; screen.style.height = window.innerHeight + "px"; };
+          fit();
+          window.addEventListener("resize", fit);
+          rfb.addEventListener("connect", () => { note.textContent = ""; fit(); });
+          rfb.addEventListener("securityfailure", (e) => { note.textContent = "Desktop refused the connection"; });
+          rfb.addEventListener("disconnect", (e) => {
+            if (e.detail && e.detail.clean) note.textContent = "Desktop disconnected";
+            else note.textContent = "Desktop connection failed. Tap Reconnect.";
+          });
+          const keys = document.getElementById("keys");
+          const named = { Backspace: 0xff08, Enter: 0xff0d, Tab: 0xff09, Escape: 0xff1b, ArrowLeft: 0xff51, ArrowUp: 0xff52, ArrowRight: 0xff53, ArrowDown: 0xff54, Delete: 0xffff };
+          function tap(sym) { rfb.sendKey(sym, null, true); rfb.sendKey(sym, null, false); }
+          keys.addEventListener("keydown", (e) => {
+            const sym = named[e.key];
+            if (sym) { e.preventDefault(); tap(sym); return; }
+            if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+              e.preventDefault();
+              tap(e.key.charCodeAt(0));
+            }
+          });
+          window.focusKeys = () => { keys.focus(); };
         }
         </script></body></html>
     """.trimIndent()
