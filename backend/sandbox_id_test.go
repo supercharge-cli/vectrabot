@@ -34,6 +34,25 @@ func TestSandboxBriefTypesOnTheBotDisplay(t *testing.T) {
 	}
 }
 
+func TestSandboxBriefLetsTheBotSolveAReadableCaptcha(t *testing.T) {
+	t.Setenv("E2B_SANDBOX_ID", "sbx-test")
+	text := sandboxBrief("bot_test")
+	for _, want := range []string{
+		"Solve it yourself",
+		"browser_handoff",
+		"reCAPTCHA",
+		"Never use a CAPTCHA-solving service",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in %s", want, text)
+		}
+	}
+	// The CAPTCHA rule must land after the desktop rules so it wins over them.
+	if strings.Index(text, "Solve it yourself") < strings.Index(text, "desktop_observe") {
+		t.Fatal("CAPTCHA rule must follow the desktop rules")
+	}
+}
+
 func TestPublicizeLinks(t *testing.T) {
 	t.Setenv("E2B_SANDBOX_ID", "id77m6epjllieap5elze5")
 	t.Setenv("E2B_DOMAIN", "e2b.app")

@@ -92,6 +92,9 @@ func sandboxBrief(botID string) string {
 	b.WriteString("If the screen did not change, click that window again and retry once.\n")
 	b.WriteString("Do not launch a guessed application when that window is already open.\n")
 	b.WriteString("The person cannot open a disk path. Give a preview link, not /home/user/workspace.\n")
+	b.WriteString("CAPTCHA: you work alone here. A readable image or text challenge is ordinary work, not a secret. Solve it yourself: read it with desktop_observe, work out the answer, then type it with desktop_action or the xdotool command above and observe again. Do not ask the person to do it and do not call browser_handoff for one.\n")
+	b.WriteString("Only a challenge that is built to detect automation, such as reCAPTCHA v3, hCaptcha invisible, or Cloudflare Turnstile, stays with the person: explain that one plainly, then call browser_handoff with action start. Never use a CAPTCHA-solving service and never try to defeat a detection check.\n")
+	b.WriteString("Passwords, MFA codes, passkeys, OAuth consent, and payment details are still the person's. Call browser_handoff for those and never ask them to paste a secret into the chat.\n")
 	b.WriteString("</sandbox>")
 	return b.String()
 }
