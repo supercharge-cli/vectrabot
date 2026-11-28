@@ -672,6 +672,11 @@ function upsertMessage(threadId, m) {
   if (i >= 0) list[i] = m; else list.push(m);
   saveChatSoon(threadId);
   if (threadId !== state.threadId) return;
+  if (m.kind === "tool" || m.kind === "thought" || m.kind === "todo" || m.kind === "changes") {
+    document.getElementById("m-" + m.id)?.remove();
+    renderWorking();
+    return;
+  }
   const el = document.getElementById("m-" + m.id);
   const scroller = $("#chat-scroll"); const atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
   if (el) el.replaceWith(renderMessage(m, list, list.indexOf(m)));
@@ -698,24 +703,26 @@ function renderChat({ keepScroll = false } = {}) {
       h("p", {}, bot.title || bot.description || "Runs Supercharge inside this workspace: code, terminal, browser and desktop."),
       h("div", { class: "suggestions" }, tips.map((t) => h("button", { type: "button", onclick: () => { $("#chat-prompt").value = t; updateComposer(); $("#chat-prompt").focus(); } }, t)))));
   }
-  list.forEach((m, i) => { if (needsLabel(list, i)) log.append(botLabel(m)); log.append(renderMessage(m, list, i)); });
-  log.append(h("div", { id: "working", class: "working", hidden: true }, h("span", { class: "dots" }, h("i"), h("i"), h("i")), h("span", { id: "working-text" }, "Working")));
+  list.forEach((m, i) => {
+    if (m.kind === "tool" || m.kind === "thought" || m.kind === "todo" || m.kind === "changes") return;
+    if (needsLabel(list, i)) log.append(botLabel(m));
+    log.append(renderMessage(m, list, i));
+  });
+
+  const face = h("span", { class: "avatar xs pulse" }); avatar(face, bot, false);
+  log.append(h("div", { id: "working", class: "working", hidden: true }, face, h("span", { id: "working-text" }, "Working")));
   renderWorking();
   if (!keepScroll) requestAnimationFrame(() => { $("#chat-scroll").scrollTop = $("#chat-scroll").scrollHeight; });
 }
-let workingSince = 0, workingTimer = null;
 function renderWorking() {
   const w = $("#working"); if (!w) return;
   const s = state.sessions.get(state.threadId); const list = state.messages.get(state.threadId) || [];
   const last = list[list.length - 1];
   const busy = !!s?.busy;
-  const streaming = busy && last && last.role === "bot" && (last.kind === "text" || (last.kind === "tool" && last.tool?.status !== "completed"));
+  const streaming = busy && last && last.role === "bot" && last.kind === "text";
   const waiting = last?.kind === "request" && last.request?.state === "pending";
   w.hidden = !busy || streaming || waiting;
-  if (busy && !workingSince) workingSince = Date.now();
-  if (!busy) workingSince = 0;
-  clearInterval(workingTimer);
-  if (!w.hidden) { const tick = () => { $("#working-text").textContent = `Working · ${Math.round((Date.now() - (workingSince || Date.now())) / 1000)}s`; }; tick(); workingTimer = setInterval(tick, 1000); }
+  if (!w.hidden) $("#working-text").textContent = activityText(list, currentBot());
   $$(".msg.agent .caret").forEach((c) => c.remove());
   if (busy && last?.kind === "text" && last.role === "bot") { const el = document.getElementById("m-" + last.id); const body = el?.querySelector(".body"); if (body) body.innerHTML = markdown(last.text, { streaming: true }); }
 }
@@ -734,7 +741,9 @@ function renderMessage(m, list, i) {
       const bubble = h("div", { class: "bubble" });
       const plain = String(m.text || "").replace(/!\[[^\]]*\]\([^)\s]+\)/g, "").trim();
       if (plain) bubble.append(h("div", { class: "body", html: markdown(plain) }));
-      for (const shot of shots) { const node = mountShot(shot.src, shot.alt); if (node) bubble.append(node); }
+      const pictures = [];
+      for (const shot of shots) { const node = mountShot(shot.src, shot.alt); if (node) pictures.push(node); }
+      if (pictures.length) bubble.append(shotRow(pictures));
       if (!bubble.childNodes.length) bubble.append(h("div", { class: "body", html: markdown(m.text) }));
       return wrap("agent", bubble);
     }
@@ -756,6 +765,106 @@ function noticeActions(m, list, last) {
   return retry;
 }
 const openTools = new Set();
+function turnBounds(list, i) {
+  let start = i;
+  while (start > 0 && list[start - 1].role !== "user") start--;
+  let end = i;
+  while (end + 1 < list.length && list[end + 1].role !== "user") end++;
+  return [start, end];
+}
+function lastTextInTurn(list, i) {
+  const [start, end] = turnBounds(list, i);
+  for (let n = end; n >= start; n--) if (list[n].kind === "text" && list[n].role !== "user") return n;
+  return -1;
+}
+function activityText(list, bot) {
+  return `${bot?.name || "AI"} is working`;
+}
+function shotRow(nodes) {
+  nodes.forEach((node, i) => node.addEventListener("click", () => openShotViewer(nodes, i)));
+  const limit = 3;
+  const shown = nodes.slice(0, nodes.length > limit ? limit - 1 : nodes.length);
+  const row = h("div", { class: "shot-row" });
+  for (const node of shown) row.append(node);
+  const extra = nodes.length - shown.length;
+  if (extra > 0) {
+    const more = h("div", { class: "shot-more" }, nodes[shown.length], h("span", {}, `+${extra}`));
+    more.addEventListener("click", () => openShotViewer(nodes, shown.length));
+    row.append(more);
+  }
+  return row;
+}
+function openShotViewer(nodes, start) {
+  const stage = h("div", { class: "shot-stage" });
+  const strip = h("div", { class: "shot-strip" });
+  let index = Math.max(0, Math.min(start, nodes.length - 1));
+  const slides = nodes.map((node) => {
+    const img = h("img", { alt: node.alt || "Screenshot", src: node.src || "" });
+    const watch = new MutationObserver(() => { if (node.src) img.src = node.src; });
+    watch.observe(node, { attributes: true, attributeFilter: ["src"] });
+    return h("div", { class: "shot-slide" }, img);
+  });
+  stage.append(...slides);
+  const thumbs = nodes.map((node, i) => {
+    const img = h("img", { alt: "", src: node.src || "" });
+    const watch = new MutationObserver(() => { if (node.src) img.src = node.src; });
+    watch.observe(node, { attributes: true, attributeFilter: ["src"] });
+    return h("button", { type: "button", class: i === index ? "on" : "", onclick: () => go(i) }, img);
+  });
+  strip.append(...thumbs);
+  const go = (i) => {
+    index = (i + nodes.length) % nodes.length;
+    count.textContent = `${index + 1} / ${nodes.length}`;
+    const slide = slides[index];
+    slide?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+    thumbs.forEach((button, n) => button.classList.toggle("on", n === index));
+  };
+  const onKey = (event) => {
+    if (event.key === "Escape") close();
+    if (event.key === "ArrowRight") go(index + 1);
+    if (event.key === "ArrowLeft") go(index - 1);
+  };
+  const close = () => { document.removeEventListener("keydown", onKey); root.remove(); };
+  stage.addEventListener("scroll", () => {
+    const width = stage.clientWidth || 1;
+    const next = Math.round(stage.scrollLeft / width);
+    if (next === index || next < 0 || next >= nodes.length) return;
+    index = next;
+    thumbs.forEach((button, n) => button.classList.toggle("on", n === index));
+  });
+  const count = h("span", {}, `${index + 1} / ${nodes.length}`);
+  const root = h("div", { class: "shot-view" },
+    h("header", {}, h("button", { type: "button", onclick: close, title: "Close" }, "×"), count, h("span", {})),
+    stage,
+    h("footer", {}, h("button", { class: "shot-nav", type: "button", onclick: () => go(index - 1), title: "Previous" }, "‹"), strip, h("button", { class: "shot-nav", type: "button", onclick: () => go(index + 1), title: "Next" }, "›")),
+  );
+  document.addEventListener("keydown", onKey);
+  document.body.append(root);
+  requestAnimationFrame(() => slides[index]?.scrollIntoView({ inline: "center", block: "nearest" }));
+}
+function chatImageNode(image) {
+  if (!image?.id) return null;
+  const img = h("img", { alt: "Shared image", class: "chat-shot" });
+  fetch(`${state.ws.host}/v1/chat-images/${enc(image.id)}`, { headers: { authorization: "Bearer " + state.ws.session } })
+    .then((r) => r.ok ? r.blob() : null)
+    .then((blob) => { if (blob) img.src = URL.createObjectURL(blob); });
+  return img;
+}
+function turnShotNodes(list, i) {
+  const [start, end] = turnBounds(list, i);
+  const nodes = [];
+  for (let n = start; n <= end; n++) {
+    const t = list[n].kind === "tool" ? list[n].tool : null;
+    if (!t) continue;
+    const img = (t.images || []).map(chatImageNode).filter(Boolean);
+    nodes.push(...img);
+    for (const path of imagePathsIn(toolOutput(t.output))) {
+      const node = mountShot(path, "Screenshot");
+      if (node) nodes.push(node);
+    }
+  }
+  return nodes;
+}
 function toolCard(t) {
   const running = t.status === "pending" || t.status === "in_progress";
   const stateEl = running ? h("span", { class: "spinner" }) : t.status === "failed" ? h("span", { class: "state-bad", html: icon("x", "sm") }) : h("span", { class: "state-ok", html: icon("check", "sm") });
@@ -771,14 +880,7 @@ function toolCard(t) {
   // An edit's diff already shows what changed; only show its output on failure.
   if (out && (!t.diffs?.length || t.status === "failed")) body.append(h("div", {}, h("h4", {}, t.status === "failed" ? "Error" : "Output"), h("pre", {}, out)));
   for (const path of imagePathsIn(out)) { const node = mountShot(path, "Screenshot"); if (node) body.append(node); }
-  for (const image of t.images || []) {
-    if (!image?.id) continue;
-    const img = h("img", { alt: "Shared image", style: { maxWidth: "100%", borderRadius: "8px", marginTop: "8px" } });
-    fetch(`${state.ws.host}/v1/chat-images/${enc(image.id)}`, { headers: { authorization: "Bearer " + state.ws.session } })
-      .then((r) => r.ok ? r.blob() : null)
-      .then((blob) => { if (blob) img.src = URL.createObjectURL(blob); });
-    body.append(img);
-  }
+  for (const image of t.images || []) { const node = chatImageNode(image); if (node) body.append(node); }
   if (!body.childNodes.length) body.append(h("div", { class: "faint" }, running ? "Running…" : "No output."));
   // Edits open by default so the diff is visible without a click.
   if ((t.diffs?.length || t.images?.length || imagePathsIn(out).length) && !openTools.has("closed:" + t.id) && !card.classList.contains("open")) { card.classList.add("open"); body.hidden = false; }

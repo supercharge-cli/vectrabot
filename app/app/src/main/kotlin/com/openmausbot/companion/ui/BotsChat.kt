@@ -2,6 +2,11 @@ package com.openmausbot.companion.ui
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -15,11 +20,19 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.ui.draw.scale
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -41,6 +54,7 @@ import androidx.compose.material.icons.filled.Create
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Lock
@@ -61,6 +75,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -126,8 +141,11 @@ internal fun BotChatPane(state: BotsState, onProviders: () -> Unit, onNotice: (S
                 }
             }
             if (messages.isEmpty()) item { EmptyChat(bot) }
-            itemsIndexed(messages) { i, m ->
-                val prev = messages.getOrNull(i - 1)
+            val shown = messages.mapIndexedNotNull { i, m -> if (m.kind == "tool" || m.kind == "thought" || m.kind == "todo" || m.kind == "changes") null else i }
+            items(shown.size, key = { shown[it] }) { slot ->
+                val i = shown[slot]
+                val m = messages[i]
+                val prev = messages.subList(0, i).lastOrNull { it.kind != "tool" && it.kind != "thought" && it.kind != "todo" && it.kind != "changes" }
                 val showLabel = !m.fromUser && (prev == null || prev.fromUser)
                 MessageView(m, bot, showLabel, client, messages, i, last = i == messages.lastIndex,
                     onRespond = { req, answer -> act { withContext(Dispatchers.IO) { client.respond(tid, req.id, answer) } } },
@@ -136,7 +154,11 @@ internal fun BotChatPane(state: BotsState, onProviders: () -> Unit, onNotice: (S
                     lastUserText = messages.lastOrNull { it.fromUser }?.text,
                 )
             }
-            if (session.busy) item { WorkingRow(session.queued) }
+            val streaming = messages.lastOrNull()?.let { !it.fromUser && it.kind == "text" } == true
+            if (session.busy && !streaming) item {
+                val anchor = messages.lastIndex
+                WorkingRow(bot, messages)
+            }
         }
         Composer(state, session, onSend = { text -> act { val q = withContext(Dispatchers.IO) { client.send(bot.id, tid, text) }; if (q) onNotice("Queued — it runs when this turn ends") } },
             onStop = { act { withContext(Dispatchers.IO) { client.interrupt(bot.id, tid) } } },
@@ -158,13 +180,34 @@ private fun EmptyChat(bot: Bot) {
 }
 
 @Composable
-private fun WorkingRow(queued: Int) {
-    var seconds by remember { mutableStateOf(0) }
-    LaunchedEffect(Unit) { while (true) { delay(1000); seconds++ } }
+private fun WorkingRow(bot: Bot, messages: List<BotMessage>) {
+    val pulse = rememberInfiniteTransition(label = "work")
+    val scale by pulse.animateFloat(0.86f, 1f, infiniteRepeatable(tween(700), RepeatMode.Reverse), label = "work-scale")
     Row(Modifier.padding(start = 4.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp, color = Vx.text3)
-        Text("Working · ${seconds}s" + if (queued > 0) " · $queued queued" else "", color = Vx.text3, fontSize = 12.sp)
+        BotFace(bot, 22.dp, modifier = Modifier.scale(scale))
+        Text(activityLine(messages, bot), color = Vx.text2, fontSize = 14.sp)
     }
+}
+
+private fun activityLine(messages: List<BotMessage>, bot: Bot): String = "${bot.name} is working"
+
+private fun lastTextInTurn(messages: List<BotMessage>, index: Int): Int {
+    val (start, end) = turnBounds(messages, index)
+    for (n in end downTo start) if (messages[n].kind == "text" && !messages[n].fromUser) return n
+    return -1
+}
+
+private fun turnBounds(messages: List<BotMessage>, index: Int): Pair<Int, Int> {
+    var start = index
+    while (start > 0 && !messages[start - 1].fromUser) start--
+    var end = index
+    while (end + 1 < messages.size && !messages[end + 1].fromUser) end++
+    return start to end
+}
+
+private fun turnTools(messages: List<BotMessage>, index: Int): List<ToolCall> {
+    val (start, end) = turnBounds(messages, index)
+    return (start..end).mapNotNull { messages[it].tool }
 }
 
 @Composable
@@ -191,16 +234,14 @@ private fun MessageView(
             "text" -> Box(Modifier.widthIn(max = 340.dp).clip(RoundedCornerShape(6.dp, 18.dp, 18.dp, 18.dp)).background(Vx.raised).padding(horizontal = 14.dp, vertical = 10.dp)) {
                 val shots = chatShots(m.text, messages, index)
                 val plain = m.text.replace(Regex("!\\[[^\\]]*\\]\\([^)\\s]+\\)"), "").trim()
+                val pictures = shots.map { ChatShot.File(it) }
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (plain.isNotBlank()) SelectionContainer { MarkdownText(plain) }
-                    shots.forEach { WorkspaceShot(client, it) }
-                    if (plain.isBlank() && shots.isEmpty()) SelectionContainer { MarkdownText(m.text) }
+                    ShotFan(client, pictures)
+                    if (plain.isBlank() && pictures.isEmpty()) SelectionContainer { MarkdownText(m.text) }
                 }
             }
-            "thought" -> Collapsible("Thinking", Icons.Default.Info) { Text(m.text, color = Vx.text2, fontSize = 13.sp) }
-            "tool" -> m.tool?.let { ToolCardView(it, client) }
-            "todo" -> PlanStepsCard(m.entries)
-            "changes" -> ChangesCard(m.changes, client)
+            "tool", "thought", "todo", "changes" -> Unit
             "request" -> m.request?.let { RequestCardView(it, onRespond) }
             "notice" -> NoticeView(m, last, onRetry = { lastUserText?.let(onRetry) }, onProviders = onProviders)
             else -> Text(m.text, color = Vx.text2)
@@ -260,7 +301,7 @@ private fun ChatImageView(client: BotsClient?, id: String) {
         }
     }
     val shown = bitmap
-    if (shown != null) Image(shown, contentDescription = "Image from the bot", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxWidth().clip(Vx.small))
+    if (shown != null) Image(shown, contentDescription = "Image from the bot", contentScale = ContentScale.Crop, modifier = Modifier.width(240.dp).height(150.dp).clip(Vx.small))
     else Text("Image", color = Vx.text3, fontSize = 12.sp)
 }
 
@@ -365,6 +406,102 @@ private fun chatShots(text: String, messages: List<BotMessage>, index: Int): Lis
     return near.flatMap { message -> message.changes.mapNotNull { workspaceImage(it.path) } + imagePaths(message.text + "\n" + (message.tool?.output ?: "")) }.distinct()
 }
 
+private sealed class ChatShot {
+    data class File(val path: String) : ChatShot()
+    data class Hosted(val id: String) : ChatShot()
+}
+
+@Composable
+private fun ShotFan(client: BotsClient, shots: List<ChatShot>) {
+    if (shots.isEmpty()) return
+    var open by remember { mutableStateOf<Int?>(null) }
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(top = 4.dp)) {
+        Box(Modifier.width(220.dp).height(150.dp).clickable { open = 0 }) {
+            shots.take(3).indices.reversed().forEach { i ->
+                val shot = shots[i]
+                ShotThumb(client, shot, Modifier
+                    .align(Alignment.CenterStart)
+                    .offset(x = (i * 26).dp)
+                    .rotate(if (i == 0) -7f else 6f * i)
+                    .size(if (i == 0) 168.dp else 150.dp, if (i == 0) 118.dp else 104.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .border(1.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(14.dp)))
+            }
+        }
+        Text("${shots.size} image" + if (shots.size == 1) "" else "s", color = Vx.text3, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
+    }
+    open?.let { start -> ShotViewer(client, shots, start) { open = null } }
+}
+
+@Composable
+private fun ShotViewer(client: BotsClient, shots: List<ChatShot>, start: Int, onClose: () -> Unit) {
+    val scroll = rememberScrollState()
+    val scope = rememberCoroutineScope()
+    var page by remember { mutableIntStateOf(start) }
+    var pageWidth by remember { mutableIntStateOf(1) }
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Column(Modifier.fillMaxSize().background(Color.Black)) {
+            Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                QuietIcon(Icons.Default.Close, onClose)
+            }
+            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                pageWidth = constraints.maxWidth.coerceAtLeast(1)
+                val width = maxWidth
+                LaunchedEffect(pageWidth) { scroll.scrollTo(start * pageWidth) }
+                Row(Modifier.fillMaxSize().horizontalScroll(scroll)) {
+                    shots.forEach { shot ->
+                        Box(Modifier.width(width).fillMaxHeight(), contentAlignment = Alignment.Center) {
+                            ShotImage(client, shot, Modifier.fillMaxWidth().padding(horizontal = 12.dp), ContentScale.Fit)
+                        }
+                    }
+                }
+                LaunchedEffect(scroll.value, constraints.maxWidth) {
+                    val w = constraints.maxWidth.coerceAtLeast(1)
+                    page = (scroll.value / w).coerceIn(0, shots.lastIndex)
+                }
+                Row(Modifier.align(Alignment.Center).fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                    QuietIcon(Icons.Default.KeyboardArrowLeft, { scope.launch { scroll.animateScrollTo(((page - 1).coerceAtLeast(0)) * pageWidth) } })
+                    QuietIcon(Icons.Default.KeyboardArrowRight, { scope.launch { scroll.animateScrollTo(((page + 1).coerceAtMost(shots.lastIndex)) * pageWidth) } })
+                }
+            }
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally)) {
+                shots.forEachIndexed { i, shot ->
+                    ShotThumb(client, shot, Modifier.size(64.dp).clip(RoundedCornerShape(10.dp)).border(2.dp, if (i == page) Color.White else Color.Transparent, RoundedCornerShape(10.dp)).clickable { scope.launch { scroll.animateScrollTo(i * pageWidth) } })
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuietIcon(icon: ImageVector, onClick: () -> Unit) {
+    Box(Modifier.size(44.dp).clip(CircleShape).background(Color(0xFF2A2A2E)).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
+        Icon(icon, null, tint = Color.White)
+    }
+}
+
+@Composable
+private fun ShotThumb(client: BotsClient, shot: ChatShot, modifier: Modifier) {
+    ShotImage(client, shot, modifier, ContentScale.Crop)
+}
+
+@Composable
+private fun ShotImage(client: BotsClient, shot: ChatShot, modifier: Modifier, scale: ContentScale) {
+    val key = when (shot) { is ChatShot.File -> shot.path; is ChatShot.Hosted -> shot.id }
+    val bitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, key) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                val bytes = when (shot) {
+                    is ChatShot.File -> client.bytes("/v1/files?path=" + java.net.URLEncoder.encode(shot.path, "UTF-8"))
+                    is ChatShot.Hosted -> client.bytes("/v1/chat-images/" + java.net.URLEncoder.encode(shot.id, "UTF-8"))
+                }
+                if (bytes.size <= 32) null else android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+            }.getOrNull()
+        }
+    }
+    bitmap?.let { Image(it, contentDescription = "Screenshot", contentScale = scale, modifier = modifier) }
+}
+
 @Composable
 private fun WorkspaceShot(client: BotsClient, path: String) {
     val bitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, path) {
@@ -375,7 +512,7 @@ private fun WorkspaceShot(client: BotsClient, path: String) {
             }.getOrNull()
         }
     }
-    bitmap?.let { Image(it, contentDescription = "Screenshot", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxWidth().clip(Vx.small)) }
+    bitmap?.let { Image(it, contentDescription = "Screenshot", contentScale = ContentScale.Crop, modifier = Modifier.width(240.dp).height(150.dp).clip(Vx.small)) }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
