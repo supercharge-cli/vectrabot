@@ -39,6 +39,8 @@ func TestSandboxBriefLetsTheBotSolveAReadableCaptcha(t *testing.T) {
 	text := sandboxBrief("bot_test")
 	for _, want := range []string{
 		"Solve it yourself",
+		"browser_screenshot",
+		"browser_fill",
 		"browser_handoff",
 		"reCAPTCHA",
 		"Never use a CAPTCHA-solving service",
